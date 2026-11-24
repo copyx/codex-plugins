@@ -38,3 +38,16 @@ root portable manifest would take precedence and silently disable hooks.
 The local Responses fixture proves the next model request contains hook context
 without using a real model or copying authentication. Actual app-server RPC calls
 separately prove the installed MCP navigation tools work inside Codex.
+
+## Verification automation (#17)
+
+Keep plugin runtime files unchanged. Replace the one-off Codex test runner with
+shared prerequisite, subprocess/RPC, and local Responses fixture logic used by
+isolated and installed verification. Add `verify` (static + all tests + isolated
+integration) and `verify:installed` (read installed/trusted hook + real error/fix
+patches). Missing prerequisites, skipped tests, missing/untrusted hooks, missing
+or stale diagnostic context must fail. Never change installation/trust in the
+installed mode. Use ephemeral sessions, credential-free child environments,
+in-memory context assertions, and unconditional temp/process cleanup; retain no
+raw model request logs. Test failure gates and cleanup before implementation,
+then run both commands on this Mac and commit automation/docs separately.

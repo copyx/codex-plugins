@@ -5,7 +5,9 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
-    "test:codex": "node scripts/test-codex.mjs"
+    "test:codex": "node scripts/test-codex.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:installed": "node scripts/verify-installed.mjs"
   },
   "engines": { "node": ">=22" }
 }
