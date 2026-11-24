@@ -1,12 +1,20 @@
 # TypeScript LSP 검증 기록
 
-검증일: 2026-11-24 (이 Mac, 로컬).
+[문서 목록](README.md) · [현재 검증 명령](verify-usage.md) · [구현 설명](typescript-lsp-implementation.md)
 
-- 작업공간: `/Users/copyx/orca/workspaces/codex-plugins/typescript-lsp`
-- 원본 클론: `/Users/copyx/projects/codex-plugins`
+아래는 실행 당시의 기록입니다. 과거 명령·임시 증거 경로와 현재 자동화의 차이는
+후속 기록 및 현재 검증 명령을 참고하세요.
+
+검증일: 2026-11-24 (로컬 macOS).
+
+경로 변수는 각각 체크아웃(`REPO_ROOT`), 원본 클론(`CLONE_ROOT`), Codex 프로필(`CODEX_PROFILE`),
+TypeScript 패키지(`TYPESCRIPT_PACKAGE_DIR`)를 뜻합니다. 원래 개인 경로는 이식 가능한 표기로 대체했습니다.
+
+- 작업공간: `$REPO_ROOT`
+- 원본 클론: `$CLONE_ROOT`
 - 작업 브랜치: `copyx/typescript-lsp`
 - 환경: Node 24.14.1, Codex CLI 0.169.1, typescript-language-server 6.0.3,
-  MiddleSomewhere tools의 TypeScript 5.9.3을 읽기 전용으로 사용했습니다.
+  기존 프로젝트의 TypeScript 5.9.3을 읽기 전용으로 사용했습니다.
 - 커밋·푸시·PR·공개 배포, 본계정 전역 설정·개인 마켓 활성화는 하지 않았습니다.
 
 ## 초기 구현: 바뀐 파일과 검사 결과 (Codex 0.169.1)
@@ -27,11 +35,11 @@
 실행한 명령:
 
 ```sh
-TEST_TYPESCRIPT_DIR=/Users/copyx/projects/middle-somewhere/tools/node_modules/typescript npm test
+TEST_TYPESCRIPT_DIR="$TYPESCRIPT_PACKAGE_DIR" npm test
 npm run check
 git diff --check
-TEST_TYPESCRIPT_DIR=/Users/copyx/projects/middle-somewhere/tools/node_modules/typescript \
-TEST_MODEL_CATALOG=/Users/copyx/.codex/models_cache.json \
+TEST_TYPESCRIPT_DIR="$TYPESCRIPT_PACKAGE_DIR" \
+TEST_MODEL_CATALOG="$CODEX_PROFILE/models_cache.json" \
 KEEP_CODEX_TEST=1 npm run test:codex
 ```
 
@@ -44,7 +52,7 @@ Node 구문 검사와 동작 테스트를 수행했으며, TypeScript 정적 타
 
 최종 임시 증거 디렉터리:
 
-`/private/var/folders/8p/ncdyh9cj6zg04bkz3kqgz_f00000gn/T/typescript-lsp-codex-dmKpbx`
+`$EVIDENCE_DIR` (당시 생성한 임시 증거 디렉터리)
 
 - `app-server-evidence.json`: hooks/list, mcpServerStatus/list와
   실제 mcpServer/tool/call definition/references/hover 응답.
@@ -61,7 +69,8 @@ main.ts:2:7: error TS2345 Argument of type 'number' is not assignable to paramet
 공개 모델 기능 메타데이터의 `models` 목록만 복사했습니다. 인증 파일과 계정 identity는
 복사하지 않았고 API 키·토큰과 Orca 세션 환경을 테스트 자식 프로세스에서 제거했습니다.
 위 임시 디렉터리의 원본 요청 파일은 로컬 세션 지침을 포함하므로 저장소에 넣지 않았습니다.
-임시 파일은 OS 정리 이후 없어질 수 있으며 테스트 명령으로 재생성할 수 있습니다.
+이 원본 로그는 과거 직접 검증의 증거입니다. 현재 자동화는 원본 요청을 저장하지 않으므로
+동일한 로그를 재생성하지 않으며, 재현 명령은 현재 검증 사용법을 따릅니다.
 
 ## 관찰한 제약과 남은 확인
 
@@ -80,15 +89,15 @@ main.ts:2:7: error TS2345 Argument of type 'number' is not assignable to paramet
    MCP 탐색은 별도의 실제 Codex app-server RPC로 검증했습니다.
 4. 언어 서버의 버전 없는 publishDiagnostics에는 최종 완료 신호가 없습니다.
    짧은 안정화 시간과 새 프로세스로 이전 패치의 진단을 격리하지만, 전체 프로젝트
-   빌드의 완전성을 보장하지 않습니다. 바뀐 파일만 검사하는 범위와 제한 시간은
-   [사용법](../plugins/typescript-lsp/README.md)에 명시했습니다.
+   빌드의 완전성을 보장하지 않습니다. 바뀐 파일만 검사하는 [사용 범위](../plugins/typescript-lsp/README.md#자동-진단-범위)와
+   [구현상 실행 제한](typescript-lsp-implementation.md#진단-동기화와-제한)을 참고하세요.
 5. 본계정 활성화가 별도로 요청되면 실제 클라이언트에서 설치하고
    [공식 훅 신뢰 절차](https://learn.chatgpt.com/docs/hooks#posttooluse)에 따라 검토한 뒤
    자연어 탐색과 패치 오류 수정을 한 번 더 확인하면 됩니다.
 
 ## 후속 설치·신뢰 및 자동화 검증 (Codex 0.172.0)
 
-현재 사용자 프로필 `/Users/copyx/.codex`에 0.1.0 설치와 사용자 훅 신뢰가 완료된 뒤,
+현재 사용자 프로필 `$CODEX_PROFILE`에 0.1.0 설치와 사용자 훅 신뢰가 완료된 뒤,
 실제 설치 캐시의 훅이 enabled=true / trusted임을 확인했습니다.
 별도 임시 TS 프로젝트의 실제 apply_patch로 오류를 만든 뒤 다음 모델 요청의
 developer 컨텍스트에서 TS2345를 확인했고, 수정 패치 후 새 훅 결과에서
@@ -105,3 +114,23 @@ developer 컨텍스트에서 TS2345를 확인했고, 수정 패치 후 새 훅 �
 현재 프로필의 설치 파일 해시 및 사용자 훅의 활성·신뢰 상태도 전후 동일했습니다.
 원본 모델 요청 로그를 저장하지 않으며 ephemeral 세션·임시 로그 경로와 자식 프로세스를 정리합니다.
 실행 경로와 전제 조건은 [자동화 사용법](verify-usage.md)에 정리했습니다.
+
+## 0.2.0 최종 도구 확장 검증
+
+기존 0.1.0의 3개 탐색 도구/훅 위에 문서 심볼·타입 정의·구현, 프로젝트 심볼,
+빠른 수정/rename 미리보기 및 명시적 적용을 추가했습니다. 최종 도구는 **11개**입니다.
+이번 실행은 Codex CLI 0.172.0 / language server 6.0.3 / TypeScript 5.9.3 환경입니다.
+
+| 범위 | 결과 |
+| --- | --- |
+| 전체 verify | 49개 통과, 실패 0, 건너뜀 0; 구문/JSON/문서 링크/매니페스트 검사 통과 |
+| 실제 격리 Codex | 조회·미리보기 9개와 쓰기 2개를 목록/호출로 확인 |
+| 실제 파일 변경 | import 추가와 TS2304 해소; 두 파일의 선언·import·참조 rename 및 동일 철자의 별도 심볼 보존 |
+| 실패 복구 | 실제 첫/두 번째 교체 후 오류, staging 동시 편집, 복구 중 별도 변경, 경쟁 트랜잭션을 검사 |
+| 기존 계약 | 실제 apply_patch 오류·수정 2회/모델 요청 3회와 TS2345 뒤 새 정상 훅 결과 유지 |
+| 격리/개인정보 | 사용자 config/설치 파일 해시 무변경, 외부 모델 호출·원본 요청 로그 저장 없음, 정상 종료 후 임시 fixture 정리 |
+
+빠른 수정 명령의 감사 근거, 선택 ID의 한계와 파일별 적용/복구·동시 편집 제한은
+[구현 설명](typescript-lsp-implementation.md#즉시-빠른-수정과-후속-명령)에 있습니다.
+초기 설치본 검사는 레거시 도구를 허용하며, 최신 릴리스의 전체 등록은 11개 목록과
+0.2.0 캐시/번들 해시를 함께 확인해야 합니다. 재설치한 훅은 기존 신뢰와 분리해 검토합니다.

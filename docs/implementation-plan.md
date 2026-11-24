@@ -1,6 +1,11 @@
 # TypeScript LSP implementation
 
-Scope: private repo marketplace, local stdio MCP navigation, and a synchronous
+Related documents: [implementation details](typescript-lsp-implementation.md),
+[verification commands](verify-usage.md), [verification record](verification.md).
+
+## Initial 0.1.0 scope (historical)
+
+Scope: repo marketplace, local stdio MCP navigation, and a synchronous
 PostToolUse command hook for apply_patch diagnostics. No global configuration,
 publication, commits, or dependency installation.
 
@@ -51,3 +56,25 @@ installed mode. Use ephemeral sessions, credential-free child environments,
 in-memory context assertions, and unconditional temp/process cleanup; retain no
 raw model request logs. Test failure gates and cleanup before implementation,
 then run both commands on this Mac and commit automation/docs separately.
+
+## 0.2.0 completed extension and release
+
+The additive release keeps the original definition/references/hover and patch
+diagnostics contracts and exposes eleven tools:
+
+1. Document symbols, type definition, and implementation navigation.
+2. Anchor/config-scoped project symbols, live-diagnostic quickfix previews, and
+   multi-file rename previews with context-bound selection IDs.
+3. A shared existing-file text edit engine and two explicit application tools
+   that regenerate a current LSP proposal before matching the selection.
+
+The implementation, preview identity, audited command effect, recovery model,
+and concurrency limits are documented in [implementation details](typescript-lsp-implementation.md).
+The [verification record](verification.md) separates earlier 0.1.0 evidence from
+the 0.2.0 checkout/isolated release checks. Installed verification remains
+compatible with earlier packages and only exercises newly advertised tools.
+
+No earlier versioning policy was present. Use 0.2.0 for these backward-compatible
+additions; keep the plugin manifest and MCP server version equal. The local
+marketplace entry derives the version from the manifest. User installation and
+hook review are release operations, separate from the isolated verification.
