@@ -1,0 +1,20 @@
+{
+  "name": "copyx-codex-plugins",
+  "interface": {
+    "displayName": "copyx Codex Plugins"
+  },
+  "plugins": [
+    {
+      "name": "typescript-lsp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/typescript-lsp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "copyx-codex-plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "test:codex": "node scripts/test-codex.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
