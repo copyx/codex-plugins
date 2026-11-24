@@ -34,6 +34,6 @@ for (const entry of catalog.plugins) {
   const hooks = JSON.parse(await readFile(path.join(entry.source.path, manifest.hooks), 'utf8'));
   assert.equal(hooks.hooks.PostToolUse[0].matcher, '^apply_patch$');
   const mcp = JSON.parse(await readFile(path.join(entry.source.path, manifest.mcpServers), 'utf8'));
-  assert.equal(mcp.mcpServers['typescript-lsp'].command, 'node');
+  assert.equal(mcp.mcpServers[entry.name].command, 'node');
 }
 console.log(`PASS: ${files.length} files checked for syntax/JSON/local Markdown links; catalog, manifest, MCP, and hook paths connected`);

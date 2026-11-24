@@ -9,7 +9,7 @@ try {
   const check = await runProcess(process.execPath, ['scripts/check.mjs'], { cwd: repo, env });
   process.stdout.write(check.stdout);
   assert.equal(check.code, 0, 'Static checks failed');
-  const files = (await readdir(new URL('../tests/', import.meta.url))).filter(f => f.endsWith('.test.mjs')).map(f => `tests/${f}`);
+  const files = (await readdir(new URL('../tests/', import.meta.url))).filter(f => f.endsWith('.test.mjs') && !f.startsWith('python-')).map(f => `tests/${f}`);
   const tests = await runProcess(process.execPath, ['--test', '--test-reporter=tap', ...files], { cwd: repo, env });
   process.stdout.write(tests.stdout);
   assert.equal(tests.code, 0, 'Tests failed');

@@ -1,0 +1,2 @@
+# Intentionally empty. Stops implicit ancestor configuration discovery when
+# no ty-specific configuration exists inside the caller's workspace boundary.

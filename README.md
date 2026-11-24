@@ -7,13 +7,16 @@ Codex에서 사용할 수 있는 로컬 플러그인 모음입니다.
 | 플러그인 | 기능 | 사용자 안내 |
 | --- | --- | --- |
 | `typescript-lsp` | 문서·프로젝트 심볼과 코드 탐색, 빠른 수정·이름 변경 미리보기 및 선택 적용, 편집 후 진단 | [설치 조건과 사용법](plugins/typescript-lsp/README.md) |
+| `python-lsp` | Python 정의·참조·호버와 편집 후 타입 진단 | [설치·환경 설정과 지원 범위](plugins/python-lsp/README.md) |
 
 TypeScript LSP 0.2.0은 조회·미리보기 도구 9개와 별도 적용 도구 2개를 제공합니다.
 파일을 변경하려면 미리보기에서 후보를 고른 뒤 적용을 명시적으로 요청하세요.
+Python LSP 0.1.0은 읽기 전용 도구 3개를 제공합니다. 별도로 준비한 ty 0.0.109의
+절대 실행 경로와 프로젝트 Python venv가 필요합니다.
 
 ## 필수 조건
 
-현재 제공하는 TypeScript LSP 플러그인에는 다음이 필요합니다.
+TypeScript LSP 플러그인에는 다음이 필요합니다.
 
 - 로컬 stdio MCP와 플러그인 훅을 지원하는 Codex CLI
 - Node.js 22 이상
@@ -32,11 +35,15 @@ TypeScript LSP 0.2.0은 조회·미리보기 도구 9개와 별도 적용 도구
 codex plugin marketplace add "$PWD" --json
 codex plugin list --available --marketplace copyx-codex-plugins --json
 codex plugin add typescript-lsp@copyx-codex-plugins --json
+# Python을 사용할 때 선택합니다. 실행 전 환경 설정은 Python 사용자 안내를 따르세요.
+codex plugin add python-lsp@copyx-codex-plugins --json
 ```
 
 마켓 이름은 `copyx-codex-plugins`이며 등록과 설치는 현재 Codex 프로필에 저장됩니다.
 설치 후 새 Codex 세션을 여세요. 자동 진단을 사용하려면 `/hooks` → `PostToolUse` →
 `Checking TypeScript diagnostics`에서 해당 훅을 검토하고 신뢰해야 합니다.
+Python도 `/hooks` → `PostToolUse` → `Checking Python diagnostics`에서 별도로 검토합니다.
+한 패치에 두 언어가 있으면 신뢰한 각 훅이 자기 언어의 변경 파일을 진단합니다.
 
 ## 사용
 

@@ -7,7 +7,9 @@
     "check": "node scripts/check.mjs",
     "test:codex": "node scripts/test-codex.mjs",
     "verify": "node scripts/verify.mjs",
-    "verify:installed": "node scripts/verify-installed.mjs"
+    "verify:installed": "node scripts/verify-installed.mjs",
+    "verify:python": "node scripts/verify-python.mjs",
+    "verify:python:trusted": "node scripts/verify-python.mjs --trusted-profile"
   },
   "engines": { "node": ">=22" }
 }

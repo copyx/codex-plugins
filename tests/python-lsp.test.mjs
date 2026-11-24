@@ -1,0 +1,202 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, symlink, rm, realpath, cp, chmod, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveProject } from '../plugins/python-lsp/lib/project.mjs';
+import { LspSession } from '../plugins/python-lsp/lib/lsp.mjs';
+
+const ty = process.env.TEST_TY_BIN;
+const pythonEnv = process.env.TEST_PYTHON_ENV;
+const plugin = fileURLToPath(new URL('../plugins/python-lsp/', import.meta.url));
+const real = { skip: !(ty && pythonEnv) && 'set TEST_TY_BIN and TEST_PYTHON_ENV', timeout: 30000 };
+async function fixture(t) {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'python-lsp-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  if (pythonEnv) await symlink(pythonEnv, path.join(root, '.venv'));
+  await mkdir(path.join(root, 'src'), { recursive: true });
+  await writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "fixture"\nversion = "0.0.0"\n[tool.ty.environment]\nroot = ["src"]\n');
+  await writeFile(path.join(root, 'src/lib.py'), 'def greet(name: str) -> str:\n    return name\n');
+  await writeFile(path.join(root, 'main.py'), 'from lib import greet\ngreet("hello")\n');
+  return root;
+}
+// Use a real stdin child for MCP and hook entry points, not imported dispatch.
+async function entry(root, script, input, bundle = plugin, overrides = {}) {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, [path.join(bundle, script)], { cwd: root, env: { ...process.env, PYTHON_LSP_TY: ty, ...overrides } });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', b => { stdout += b; }); child.stderr.on('data', b => { stderr += b; });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 24000);
+  try {
+    child.stdin.end(input);
+    const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+    assert.equal(code, 0, stderr); return stdout;
+  } finally { clearTimeout(timer); child.kill(); }
+}
+const message = (id, name, args) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+test('Python real LSP capabilities, src layout navigation and fresh v1/v2 empty diagnostics', real, async t => {
+  const root = await fixture(t), project = await resolveProject('main.py', root, { env: {} });
+  const s = new LspSession(project, { command: ty }); t.after(() => s.close());
+  await s.start();
+  assert.equal(s.capabilities.positionEncoding, 'utf-16');
+  assert.ok(s.capabilities.definitionProvider && s.capabilities.referencesProvider && s.capabilities.hoverProvider);
+  const uri = await s.sync(project.file), params = { textDocument: { uri }, position: { line: 1, character: 2 } };
+  assert.match(JSON.stringify(await s.request('textDocument/definition', params)), /src\/lib.py/);
+  assert.ok((await s.request('textDocument/references', { ...params, context: { includeDeclaration: true } })).length >= 2);
+  assert.match(JSON.stringify(await s.request('textDocument/hover', params)), /name: str/);
+  await writeFile(project.file, 'from lib import greet\ngreet(123)\n');
+  const bad = (await s.diagnostics([project.file]))[0];
+  assert.equal(bad.status, 'received'); assert.ok(bad.diagnostics.some(d => d.code === 'invalid-argument-type'));
+  await writeFile(project.file, 'from lib import greet\ngreet("fixed")\n');
+  const fixed = (await s.diagnostics([project.file]))[0];
+  assert.equal(fixed.status, 'received'); assert.deepEqual(fixed.diagnostics, []);
+  assert.ok(fixed.version > bad.version);
+});
+test('Python ty.toml wins over pyproject rules and both config forms apply', real, async t => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, 'main.py'), 'def f(x: str): return x\nf(123)\n');
+  await writeFile(path.join(root, 'ty.toml'), '[rules]\ninvalid-argument-type = "ignore"\n');
+  const s = new LspSession(await resolveProject('main.py', root, { env: {} }), { command: ty }); t.after(() => s.close());
+  await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
+  assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
+});
+test('Python actual MCP lists only three read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+  const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
+  await cp(plugin, bundle, { recursive: true });
+  const line = 'emoji = "😀"; value = greet("hi")';
+  await writeFile(path.join(root, 'unicode.py'), `from lib import greet\r\n${line}\r\n# no symbol here\r\n`);
+  await writeFile(path.join(root, 'src/api.pyi'), 'def greet_stub(name: str) -> str: ...\n');
+  await writeFile(path.join(root, 'stub.py'), 'from api import greet_stub\ngreet_stub("hi")\n');
+  const args = { workspace_root: root, file: 'unicode.py', line: 2, character: line.indexOf('greet') + 2 };
+  const requests = [ { jsonrpc: '2.0', id: 1, method: 'initialize' }, { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    ...['definition', 'references', 'hover'].map((name, i) => message(i + 3, name, args)),
+    message(6, 'definition', { ...args, line: 3, character: 1 }),
+    message(7, 'definition', { ...args, file: 'stub.py', line: 2, character: 2 }),
+    message(8, 'hover', { ...args, file: 'src/api.pyi', line: 1, character: 8 }),
+    message(9, 'hover', { ...args, file: '../outside.py' }),
+    message(10, 'hover', { ...args, line: 200 }),
+    message(11, 'hover', { ...args, character: 11 }), // splitting the emoji surrogate pair
+    message(12, 'hover', { ...args, extra: true }) ];
+  const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
+  assert.equal(output[0].result.serverInfo.version, '0.1.0');
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover']);
+  assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
+  for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
+  assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
+  const hover = JSON.parse(output.find(r => r.id === 5).result.content[0].text).result;
+  assert.equal(hover.range.start.character, line.indexOf('greet'));
+  assert.equal(JSON.parse(output.find(r => r.id === 6).result.content[0].text).result, null);
+  assert.match(JSON.stringify(output.find(r => r.id === 7)), /api.pyi/);
+  for (const id of [9,10,11,12]) assert.equal(output.find(r => r.id === id).result.isError, true);
+});
+test('Python hook reports actual error then new clean snapshot and ignores deletion/non-Python/other tools', real, async t => {
+  const root = await fixture(t);
+  const event = { cwd: root, hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: '*** Update File: main.py\n*** Update File: main.ts\n*** Delete File: gone.py' };
+  await writeFile(path.join(root, 'main.py'), 'from lib import greet\ngreet(123)\n');
+  const bad = JSON.parse(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify(event))).hookSpecificOutput.additionalContext;
+  assert.match(bad, /ty.*invalid-argument-type/); assert.doesNotMatch(bad, /main.ts|gone.py/);
+  await writeFile(path.join(root, 'main.py'), 'from lib import greet\ngreet("fixed")\n');
+  const clean = JSON.parse(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify(event))).hookSpecificOutput.additionalContext;
+  assert.match(clean, /main.py: no diagnostics published for this snapshot/); assert.doesNotMatch(clean, /invalid-argument-type/);
+  for (const patch of ['*** Delete File: main.py', '*** Update File: main.ts']) assert.equal(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify({ ...event, tool_input: patch })), '');
+  assert.equal(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify({ ...event, tool_name: 'Bash' })), '');
+});
+test('Python request and diagnostic deadlines reap unresponsive children; missing executable is actionable', { timeout: 6000 }, async t => {
+  const root = await fixture(t), command = path.join(root, 'silent-lsp');
+  await cp(new URL('./fixtures/silent-lsp.mjs', import.meta.url), command); await chmod(command, 0o755);
+  const p = { root, file: path.join(root, 'main.py'), workspace: root, environment: { path: root } };
+  const s = new LspSession(p, { command, checkVersion: false, timeoutMs: 500, diagnosticMs: 80, requireCapabilities: false });
+  t.after(() => s.close()); await s.start();
+  assert.equal((await s.diagnostics([p.file]))[0].status, 'timeout');
+  await assert.rejects(s.request('unanswered', {}, 30), /timeout/);
+  await s.close(); await new Promise(r => setTimeout(r, 40));
+  assert.throws(() => process.kill(s.child.pid, 0), /ESRCH/);
+  const missing = new LspSession(p, { command: path.join(root, 'missing') });
+  await assert.rejects(missing.start(), /PYTHON_LSP_TY|not found|ENOENT/); await missing.close();
+});
+test('Python rejects old diagnostic versions, oversize frames and unsupported server requests', () => {
+  const s = new LspSession({ root: '/tmp' });
+  assert.throws(() => s.consume(Buffer.from('Content-Length: 99999999\r\n\r\n')), /exceeds/);
+  const frames = []; s.send = m => frames.push(m);
+  const consume = message => { const b = Buffer.from(JSON.stringify(message)); s.consume(Buffer.concat([Buffer.from(`Content-Length: ${b.length}\r\n\r\n`), b])); };
+  s.buffer = Buffer.alloc(0);
+  consume({ jsonrpc: '2.0', id: 1, method: 'workspace/applyEdit', params: { edit: {} } });
+  assert.equal(frames[0].result.applied, false);
+  s.documents.set('file:///tmp/a.py', { version: 2 });
+  consume({ method: 'textDocument/publishDiagnostics', params: { uri: 'file:///tmp/a.py', version: 1, diagnostics: [{ message: 'old' }] } });
+  assert.equal(s.freshPublication('file:///tmp/a.py', 0), false);
+  consume({ method: 'textDocument/publishDiagnostics', params: { uri: 'file:///tmp/a.py', diagnostics: [] } });
+  assert.equal(s.freshPublication('file:///tmp/a.py', 0), false, 'versionless publication cannot prove this snapshot');
+});
+test('Python MCP invalid JSON/unknown tools remain errors without terminating', async t => {
+  const root = await fixture(t);
+  const responses = (await entry(root, 'server.mjs', 'null\nno-json\n' + JSON.stringify(message(1, '__proto__', {})) + '\n')).trim().split('\n').map(JSON.parse);
+  assert.equal(responses[0].error.code, -32600); assert.equal(responses[1].error.code, -32700); assert.equal(responses[2].result.isError, true);
+});
+test('Python external venv import locations are labeled outside without bridge source reads', real, async t => {
+  const root = await fixture(t), external = `${root}-venv`;
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const { runProcess } = await import('../scripts/lib/codex-verification.mjs');
+  const prepared = await runProcess(path.join(pythonEnv, 'bin/python'), ['-I', '-m', 'venv', '--without-pip', external], { timeoutMs: 10000 });
+  assert.equal(prepared.code, 0);
+  const metadata = await readFile(path.join(external, 'pyvenv.cfg'), 'utf8');
+  const version = /^version = (\d+\.\d+)/m.exec(metadata)[1];
+  const site = path.join(external, `lib/python${version}/site-packages/env_marker`);
+  await mkdir(site, { recursive: true });
+  await writeFile(path.join(site, '__init__.py'), 'def external(value: str) -> str:\n    return value\n');
+  await writeFile(path.join(site, 'py.typed'), '');
+  await writeFile(path.join(root, 'external.py'), 'from env_marker import external\nexternal("hello")\n');
+  const output = JSON.parse((await entry(root, 'server.mjs', JSON.stringify(message(1, 'definition', { workspace_root: root, file: 'external.py', line: 2, character: 2 })) + '\n', plugin, { PYTHON_LSP_PYTHON: external })).trim());
+  assert.ok(!output.result.isError, JSON.stringify(output));
+  const data = JSON.parse(output.result.content[0].text);
+  assert.equal(data.result[0].workspace_boundary, 'outside');
+  assert.match(data.result[0].targetUri ?? data.result[0].uri, /env_marker/);
+  assert.equal(Object.hasOwn(data.result[0], 'text'), false);
+});
+test('Python mixed-project hook reports new/moved .py/.pyi separately and missing environment as not checked', real, async t => {
+  const root = await fixture(t);
+  for (const [name, type] of [['a', 'str'], ['b', 'int']]) {
+    await mkdir(path.join(root, name));
+    await symlink(pythonEnv, path.join(root, name, '.venv'));
+    await writeFile(path.join(root, name, 'ty.toml'), '[environment]\nroot = ["."]\n');
+    await writeFile(path.join(root, name, 'main.py'), `def f(value: ${type}): return value\nf(123)\n`);
+  }
+  await writeFile(path.join(root, 'b/api.pyi'), 'def api(value: int) -> int: ...\n');
+  await mkdir(path.join(root, 'missing'));
+  await writeFile(path.join(root, 'missing/ty.toml'), '');
+  await writeFile(path.join(root, 'missing/main.py'), 'x = 1');
+  const event = { cwd: root, hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: { patch: '*** Update File: a/old.py\n*** Move to: a/main.py\n*** Add File: b/main.py\n*** Add File: b/api.pyi\n*** Update File: missing/main.py' } };
+  const context = JSON.parse(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify(event))).hookSpecificOutput.additionalContext;
+  assert.match(context, /a\/main.py:.*ty invalid-argument-type/);
+  assert.match(context, /b\/main.py: no diagnostics/); assert.match(context, /b\/api.pyi: no diagnostics/);
+  assert.match(context, /missing\/main.py: not checked: Set PYTHON_LSP_PYTHON/); assert.doesNotMatch(context, /old.py/);
+});
+test('Python hook unavailable server is incomplete, never a fresh clean result', real, async t => {
+  const root = await fixture(t);
+  const event = { cwd: root, hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: '*** Update File: main.py' };
+  const context = JSON.parse(await entry(root, 'hooks/post-tool-use.mjs', JSON.stringify(event), plugin, { PYTHON_LSP_TY: path.join(root, 'missing-ty') })).hookSpecificOutput.additionalContext;
+  assert.match(context, /incomplete.*PYTHON_LSP_TY/); assert.doesNotMatch(context, /no diagnostics/);
+});
+test('Python validates exact ty version and absolute executable before starting a server', async t => {
+  const root = await fixture(t), command = path.join(root, 'wrong-ty');
+  await writeFile(command, '#!/usr/bin/env node\nconsole.log("ty 0.0.108");\n'); await chmod(command, 0o755);
+  const p = { root, environment: { path: root } };
+  const wrong = new LspSession(p, { command });
+  await assert.rejects(wrong.start(), /must be ty 0.0.109/); assert.equal(wrong.child, undefined);
+  const relative = new LspSession(p, { command: 'ty' });
+  await assert.rejects(relative.start(), /absolute/); assert.equal(relative.child, undefined);
+});
+test('Python no-config workspace does not inherit parent ty rules across its boundary', real, async t => {
+  const parent = await fixture(t), root = path.join(parent, 'isolated');
+  await writeFile(path.join(parent, 'ty.toml'), '[rules]\ninvalid-argument-type = "ignore"\n');
+  await mkdir(root); await symlink(pythonEnv, path.join(root, '.venv'));
+  await writeFile(path.join(root, 'main.py'), 'def greet(name: str): return name\ngreet(123)\n');
+  const project = await resolveProject('main.py', root, { env: {} });
+  assert.equal(project.config, null);
+  const s = new LspSession(project, { command: ty }); t.after(() => s.close());
+  await s.start();
+  const result = (await s.diagnostics([project.file]))[0];
+  assert.equal(result.status, 'received');
+  assert.ok(result.diagnostics.some(d => d.code === 'invalid-argument-type'));
+});

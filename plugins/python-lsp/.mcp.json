@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "python-lsp": {
+      "command": "node", "args": ["./server.mjs"], "cwd": ".",
+      "env_vars": ["PYTHON_LSP_TY", "PYTHON_LSP_PYTHON", "VIRTUAL_ENV"]
+    }
+  }
+}

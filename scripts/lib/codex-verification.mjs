@@ -125,8 +125,16 @@ export function navigationTools(tools, { installed = false } = {}) {
   // Check new tools when advertised, but require all of them for the checkout.
   return [...baseline, ...added.filter(name => tools?.[name])];
 }
-function contexts(request) {
-  return (request?.input ?? []).filter(i => i.role === 'developer').map(i => (i.content ?? []).filter(c => c.type === 'input_text').map(c => c.text).join('\n')).filter(text => text.includes('TypeScript LSP post-patch diagnostics'));
+function contexts(request, language = 'TypeScript') {
+  return (request?.input ?? []).filter(i => i.role === 'developer').map(i => (i.content ?? []).filter(c => c.type === 'input_text').map(c => c.text).join('\n')).filter(text => text.includes(`${language} LSP post-patch diagnostics`));
+}
+export function verifyPythonTransition(errorRequest, fixedRequest) {
+  const errors = contexts(errorRequest, 'Python'), fixed = contexts(fixedRequest, 'Python');
+  assert.match(errors.at(-1) ?? '', /invalid-argument-type/, 'Error patch must deliver Python invalid-argument-type in developer context');
+  assert.ok(fixed.length > errors.length, 'Fix must deliver a fresh Python hook context');
+  assert.doesNotMatch(fixed.at(-1), /invalid-argument-type/, 'Fresh Python clean result must not contain invalid-argument-type');
+  assert.match(fixed.at(-1), /main\.py: no diagnostics published for this snapshot/, 'Fix must deliver a clean Python result');
+  return { pythonErrorContexts: errors.length, pythonFixedContexts: fixed.length };
 }
 export function verifyTransition(errorRequest, fixedRequest) {
   const errors = contexts(errorRequest), fixed = contexts(fixedRequest);
@@ -173,15 +181,52 @@ async function appServer(options, env, work, installed, navigate = true) {
       const relative = path.relative(path.join(options.home, 'plugins/cache/copyx-codex-plugins/typescript-lsp'), hook.sourcePath ?? '');
       assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'Installed verification must use the cached plugin hook');
     }
+    if (options.python) {
+      const pythonHook = hooks.data.flatMap(d => d.hooks).find(h => h.pluginId === 'python-lsp@copyx-codex-plugins' && h.eventName === 'postToolUse');
+      assert.ok(pythonHook?.enabled, 'Independent Python hook must be discovered and enabled');
+      if (installed) assert.equal(pythonHook.trustStatus, 'trusted', 'Python hook must be reviewed in the selected isolated profile before trusted verification');
+      state.pythonTrustStatus = pythonHook.trustStatus;
+      state.pythonCurrentHash = pythonHook.currentHash;
+      const cached = path.dirname(path.dirname(pythonHook.sourcePath));
+      const relative = path.relative(path.join(env.CODEX_HOME, 'plugins/cache/copyx-codex-plugins/python-lsp'), cached);
+      assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'Python hook must run from the selected profile cache');
+      async function hashes(dir, prefix = '') {
+        const found = {};
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          const file = path.join(dir, entry.name), key = path.join(prefix, entry.name);
+          if (entry.isDirectory()) Object.assign(found, await hashes(file, key));
+          else found[key] = createHash('sha256').update(await readFile(file)).digest('hex');
+        }
+        return found;
+      }
+      const expected = await hashes(path.join(repo, 'plugins/python-lsp'));
+      assert.deepEqual(await hashes(cached), expected, 'Cached Python bundle must exactly match this checkout, including all runtime files');
+      state.pythonBundleFiles = Object.keys(expected).length;
+    }
     if (!navigate) return state;
     const thread = await rpc('thread/start', { cwd: work, ephemeral: true, approvalPolicy: 'never', sandbox: 'workspace-write' });
     const threadId = thread.thread.id;
     const inventory = await rpc('mcpServerStatus/list', { threadId, serverName: 'typescript-lsp' });
     const server = inventory.data.find(s => s.name === 'typescript-lsp');
+    if (options.python) {
+      const pythonInventory = await rpc('mcpServerStatus/list', { threadId, serverName: 'python-lsp' });
+      const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
+      assert.equal(pythonServer?.serverInfo?.version, '0.1.0');
+      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'hover', 'references']);
+      for (const tool of ['definition', 'references', 'hover']) {
+        assert.equal(pythonServer.tools[tool].annotations.readOnlyHint, true);
+        const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file: 'main.py', line: 3, character: 2 } });
+        assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
+        const data = JSON.parse(result.content[0].text).result;
+        if (tool === 'definition') assert.equal((data[0].range ?? data[0].targetSelectionRange).start.line, 0);
+        if (tool === 'references') assert.ok(data.length >= 2);
+        if (tool === 'hover') assert.match(data.contents.value, /name: str/);
+      }
+    }
     const bundleRoot = path.dirname(path.dirname(hook.sourcePath));
     const manifest = JSON.parse(await readFile(path.join(bundleRoot, '.codex-plugin/plugin.json'), 'utf8'));
     assert.equal(server?.serverInfo?.version, manifest.version, 'Actual MCP server version must match the installed manifest');
-    const checked = navigationTools(server?.tools, { installed });
+    const checked = navigationTools(server?.tools, { installed: installed && !options.python });
     const call = (tool, args) => rpc('mcpServer/tool/call', { threadId, server: 'typescript-lsp', tool, arguments: { workspace_root: work, ...args } });
     for (const tool of checked) {
       assert.equal(server.tools[tool].annotations?.readOnlyHint, true, `${tool} must remain read-only`);
@@ -289,13 +334,15 @@ async function patchFixture(options, env, work, temp, installed) {
       for await (const chunk of request) { body += chunk; assert.ok(body.length < 8 * 1024 * 1024, 'Model fixture input exceeded limit'); }
       const payload = JSON.parse(body);
       const disk = await readFile(path.join(work, 'main.ts'), 'utf8');
-      observed.push({ input: contexts(payload).map(text => ({ role: 'developer', content: [{ type: 'input_text', text }] })), disk });
+      const pythonDisk = options.python ? await readFile(path.join(work, 'main.py'), 'utf8') : null;
+      observed.push({ input: [...contexts(payload), ...(options.python ? contexts(payload, 'Python') : [])].map(text => ({ role: 'developer', content: [{ type: 'input_text', text }] })), disk, pythonDisk });
       const stage = observed.length;
       assert.ok(stage <= 3, 'Unexpected extra model request');
       const before = stage === 1 ? 'greet("hello");' : 'greet(123);';
       const after = stage === 1 ? 'greet(123);' : 'greet("hello");';
+      const pythonPatch = options.python ? `\n*** Update File: ${path.join(work, 'main.py')}\n@@\n-${before.slice(0, -1)}\n+${after.slice(0, -1)}` : '';
       const item = stage <= 2
-        ? { type: 'custom_tool_call', id: `ct_${stage}`, call_id: `call_${stage}`, name: 'apply_patch', input: `*** Begin Patch\n*** Update File: ${path.join(work, 'main.ts')}\n@@\n-${before}\n+${after}\n*** End Patch` }
+        ? { type: 'custom_tool_call', id: `ct_${stage}`, call_id: `call_${stage}`, name: 'apply_patch', input: `*** Begin Patch\n*** Update File: ${path.join(work, 'main.ts')}\n@@\n-${before}\n+${after}${pythonPatch}\n*** End Patch` }
         : { type: 'message', id: 'msg_done', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Verification complete.', annotations: [] }] };
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const emit = event => response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -325,9 +372,13 @@ async function patchFixture(options, env, work, temp, installed) {
     assert.equal(observed.length, 3, 'Expected initial, error, and fixed model requests');
     assert.match(observed[1].disk, /greet\(123\)/, 'First real apply_patch did not introduce the error');
     assert.match(observed[2].disk, /greet\("hello"\)/, 'Second real apply_patch did not fix the error');
+    if (options.python) {
+      assert.match(observed[1].pythonDisk, /greet\(123\)/);
+      assert.match(observed[2].pythonDisk, /greet\("hello"\)/);
+    }
     const events = result.stdout.trim().split('\n').map(line => JSON.parse(line));
     assert.equal(events.filter(e => e.type === 'item.completed' && e.item?.type === 'file_change' && e.item.status === 'completed').length, 2, 'Expected two completed real apply_patch events');
-    return { ...verifyTransition(observed[1], observed[2]), modelRequests: observed.length, completedPatches: 2 };
+    return { ...verifyTransition(observed[1], observed[2]), ...(options.python ? verifyPythonTransition(observed[1], observed[2]) : {}), modelRequests: observed.length, completedPatches: 2 };
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 }
 
@@ -336,10 +387,11 @@ async function hashConfig(home) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 async function installedFiles(home) {
-  const root = path.join(home, 'plugins/cache/copyx-codex-plugins/typescript-lsp');
+  const root = path.join(home, 'plugins/cache/copyx-codex-plugins');
   const files = {};
   async function walk(dir) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (dir === root && !['typescript-lsp', 'python-lsp'].includes(entry.name)) continue;
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) await walk(file);
       else files[path.relative(root, file)] = createHash('sha256').update(await readFile(file)).digest('hex');
@@ -390,13 +442,19 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(applicationSources)) await writeFile(path.join(work, 'apply-project', file), text);
     await writeFile(path.join(temp, 'models.json'), JSON.stringify({ models: [options.model] }), { mode: 0o600 });
     const env = cleanEnvironment(home);
+    if (options.python) {
+      await symlink(options.pythonEnv, path.join(work, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
+      sources['main.py'] = 'def greet(name: str) -> str:\n    return name\ngreet("hello")\n';
+      await writeFile(path.join(work, 'main.py'), sources['main.py']);
+      env.PYTHON_LSP_TY = options.ty;
+    }
     if (!installed) {
-      for (const args of [['plugin', 'marketplace', 'add', repo, '--json'], ['plugin', 'list', '--available', '--marketplace', 'copyx-codex-plugins', '--json'], ['plugin', 'add', pluginId, '--json']]) {
+      for (const args of [['plugin', 'marketplace', 'add', repo, '--json'], ['plugin', 'list', '--available', '--marketplace', 'copyx-codex-plugins', '--json'], ['plugin', 'add', pluginId, '--json'], ...(options.python ? [['plugin', 'add', 'python-lsp@copyx-codex-plugins', '--json']] : [])]) {
         assert.ok(!interrupted, 'Verification interrupted');
         const result = await runProcess(options.codex, args, { cwd: work, env });
         assert.equal(result.code, 0, 'Isolated marketplace discovery/install failed');
         const response = JSON.parse(result.stdout);
-        if (args[1] === 'list') assert.ok(response.available.some(p => p.pluginId === pluginId), 'Marketplace catalog did not expose the plugin');
+        if (args[1] === 'list') for (const name of [pluginId, ...(options.python ? ['python-lsp@copyx-codex-plugins'] : [])]) assert.ok(response.available.some(p => p.pluginId === name), 'Marketplace catalog did not expose the plugin');
       }
     }
     assert.ok(!interrupted, 'Verification interrupted');
@@ -407,7 +465,7 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }

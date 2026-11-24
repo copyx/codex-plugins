@@ -49,6 +49,10 @@ TEST_MODEL_CATALOG=/absolute/path/to/models_cache.json npm run verify:installed
 TypeScript 경로가 없으면 실제 LSP 테스트를 건너뛰므로 전체 검증에는 `verify`를 사용하세요.
 `npm run test:codex`는 공통 검증기를 사용하는 격리 통합 검사만 실행합니다.
 
+Python 검증은 `TEST_TY_BIN`, `TEST_PYTHON_ENV`를 추가하고 `npm run verify:python`을
+실행합니다. 기존 `verify`는 Python 준비 없이 TS 회귀를 계속 검사합니다.
+두 언어 혼합 패치와 정상 신뢰 프로필 검사는 [Python 검증 절차](python-lsp.md#재현-명령)에 있습니다.
+
 ## 0.2.0 회귀 범위
 
 프로젝트/config 경계와 빈/다중 탐색 결과, 실제 진단의 누락 import 미리보기,
