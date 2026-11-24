@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, rm, realpath, copyFile, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, realpath, copyFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -176,7 +176,9 @@ test('MCP initializes, lists navigation tools, calls hover over stdio, and close
   const result = await run('server.mjs', messages.map(m => JSON.stringify(m)).join('\n') + '\n', root);
   assert.equal(result.code, 0, result.stderr);
   const responses = result.stdout.trim().split('\n').map(JSON.parse);
-  assert.equal(responses.find(r => r.id === 2).result.tools.length, 3);
+  const manifest = JSON.parse(await readFile(path.join(plugin, '.codex-plugin/plugin.json'), 'utf8'));
+  assert.equal(responses.find(r => r.id === 1).result.serverInfo.version, manifest.version);
+  assert.deepEqual(responses.find(r => r.id === 2).result.tools.map(t => t.name).sort(), ['definition', 'references', 'hover', 'document_symbols', 'type_definition', 'implementation', 'project_symbols', 'code_actions_preview', 'rename_preview', 'code_action_apply', 'rename_apply'].sort());
   const call = responses.find(r => r.id === 3).result;
   assert.ok(!call.isError, JSON.stringify(call));
   assert.match(JSON.stringify(call), /name: string/);

@@ -116,6 +116,15 @@ export function requireTrustedHook(hooks) {
   assert.equal(hook.trustStatus, 'trusted', 'Hook is not trusted: open /hooks → PostToolUse → Checking TypeScript diagnostics and review this hook; verification never changes trust');
   return hook;
 }
+export function navigationTools(tools, { installed = false } = {}) {
+  const baseline = ['definition', 'references', 'hover'];
+  const added = ['document_symbols', 'type_definition', 'implementation', 'project_symbols', 'code_actions_preview', 'rename_preview'];
+  const required = installed ? baseline : [...baseline, ...added];
+  assert.ok(required.every(name => tools?.[name]), 'Expected MCP navigation tools are missing');
+  // An older installed package may legitimately expose only the original tools.
+  // Check new tools when advertised, but require all of them for the checkout.
+  return [...baseline, ...added.filter(name => tools?.[name])];
+}
 function contexts(request) {
   return (request?.input ?? []).filter(i => i.role === 'developer').map(i => (i.content ?? []).filter(c => c.type === 'input_text').map(c => c.text).join('\n')).filter(text => text.includes('TypeScript LSP post-patch diagnostics'));
 }
@@ -169,16 +178,102 @@ async function appServer(options, env, work, installed, navigate = true) {
     const threadId = thread.thread.id;
     const inventory = await rpc('mcpServerStatus/list', { threadId, serverName: 'typescript-lsp' });
     const server = inventory.data.find(s => s.name === 'typescript-lsp');
-    assert.ok(server?.tools?.definition && server.tools.references && server.tools.hover, 'Installed MCP navigation tools are missing');
-    for (const tool of ['definition', 'references', 'hover']) {
-      const result = await rpc('mcpServer/tool/call', { threadId, server: 'typescript-lsp', tool, arguments: { workspace_root: work, file: 'main.ts', line: 2, character: 3 } });
+    const bundleRoot = path.dirname(path.dirname(hook.sourcePath));
+    const manifest = JSON.parse(await readFile(path.join(bundleRoot, '.codex-plugin/plugin.json'), 'utf8'));
+    assert.equal(server?.serverInfo?.version, manifest.version, 'Actual MCP server version must match the installed manifest');
+    const checked = navigationTools(server?.tools, { installed });
+    const call = (tool, args) => rpc('mcpServer/tool/call', { threadId, server: 'typescript-lsp', tool, arguments: { workspace_root: work, ...args } });
+    for (const tool of checked) {
+      assert.equal(server.tools[tool].annotations?.readOnlyHint, true, `${tool} must remain read-only`);
+      if (['project_symbols', 'code_actions_preview', 'rename_preview'].includes(tool)) {
+        const args = tool === 'project_symbols' ? { file: 'main.ts', query: 'square' }
+          : tool === 'code_actions_preview' ? { file: 'quickfix.ts', range: { start: { line: 1, character: 1 }, end: { line: 1, character: 33 } } }
+            : { file: 'navigation.ts', line: 1, character: 18, new_name: 'Greeting' };
+        const response = await call(tool, args);
+        assert.ok(!response.isError, `MCP ${tool} failed`);
+        const data = JSON.parse(response.content[0].text);
+        if (tool === 'project_symbols') {
+          assert.equal(data.search_scope.kind, 'selected_project_session');
+          assert.ok(data.result.some(s => s.name === 'square' && s.location.uri.endsWith('/utils.ts')));
+          const other = await call(tool, { file: 'main.ts', query: 'SiblingSymbol' });
+          assert.deepEqual(JSON.parse(other.content[0].text).result, []);
+          const sibling = await call(tool, { file: 'sibling/other.ts', query: 'SiblingSymbol' });
+          assert.ok(JSON.parse(sibling.content[0].text).result.some(s => s.name === 'SiblingSymbol'));
+        } else {
+          const preview = tool === 'code_actions_preview' ? data.result.find(a => a.title.includes('Add import')) : data.result;
+          assert.ok(preview, `MCP ${tool} returned no preview`);
+          assert.equal(preview.preview_only, true);
+          assert.match(preview.selection_id, /^sha256:[a-f0-9]{64}$/);
+          assert.ok(preview.edit.files.every(f => f.sha256 && f.workspace_boundary === 'inside'));
+          if (tool === 'code_actions_preview') {
+            assert.ok(data.diagnostics.some(d => d.code === 2304));
+            assert.equal(preview.status, 'requires_command');
+          } else { assert.equal(preview.status, 'edit_available'); assert.ok(preview.edit.files.length >= 2); }
+        }
+        const outside = await call(tool, { ...args, file: '../outside.ts' });
+        assert.equal(outside.isError, true, `MCP ${tool} must reject files outside the root`);
+        continue;
+      }
+      const file = ['definition', 'references', 'hover'].includes(tool) ? 'main.ts' : 'navigation.ts';
+      const args = tool === 'document_symbols' ? { file } : { file, line: tool === 'type_definition' ? 5 : tool === 'implementation' ? 1 : 2, character: tool === 'type_definition' ? 14 : tool === 'implementation' ? 18 : 3 };
+      const result = await call(tool, args);
       assert.ok(!result.isError, `MCP ${tool} failed`);
       const data = JSON.parse(result.content[0].text).result;
       if (tool === 'definition') assert.equal(data[0].range.start.line, 0);
       if (tool === 'references') assert.ok(data.length >= 2);
       if (tool === 'hover') assert.match(data.contents.value, /name: string/);
+      if (tool === 'document_symbols') {
+        for (const [name, kind] of [['Greeter', 11], ['FriendlyGreeter', 5], ['decorate', 12], ['greet', 6]]) {
+          assert.ok(data.some(s => s.name === name && s.kind === kind && s.location.uri.endsWith('/navigation.ts')), `MCP symbol ${name} missing`);
+        }
+      }
+      if (tool === 'type_definition') { assert.equal(data.length, 1); assert.equal(data[0].range.start.line, 0); }
+      if (tool === 'implementation') { assert.equal(data.length, 2); assert.deepEqual(data.map(r => r.range.start.line).sort(), [1, 2]); }
+      if (['document_symbols', 'type_definition', 'implementation'].includes(tool)) {
+        const emptyArgs = tool === 'document_symbols' ? { file: 'empty.ts' } : tool === 'type_definition' ? { file: 'empty.ts', line: 1, character: 4 } : { file, line: 6, character: 18 };
+        const empty = await call(tool, emptyArgs);
+        assert.ok(!empty.isError, `MCP ${tool} empty-result request failed`);
+        assert.deepEqual(JSON.parse(empty.content[0].text).result, [], `MCP ${tool} must return an empty result`);
+        const outside = await call(tool, { ...args, file: '../outside.ts' });
+        assert.equal(outside.isError, true, `MCP ${tool} must reject files outside the root`);
+      }
     }
-    return state;
+    const applications = ['code_action_apply', 'rename_apply'].filter(name => server.tools[name]);
+    if (!installed) assert.equal(applications.length, 2, 'Checkout must advertise both explicit write tools');
+    for (const tool of applications) {
+      assert.equal(server.tools[tool].annotations?.readOnlyHint, false, `${tool} is a write tool`);
+      assert.equal(server.tools[tool].annotations?.destructiveHint, true);
+    }
+    if (applications.includes('code_action_apply')) {
+      const args = { file: 'apply-project/quickfix.ts', range: { start: { line: 1, character: 23 }, end: { line: 1, character: 29 } } };
+      const shown = await call('code_actions_preview', args);
+      const selected = JSON.parse(shown.content[0].text).result.find(a => a.title.includes('Add import'));
+      assert.ok(selected, 'Actual write fixture needs an import candidate');
+      const response = await call('code_action_apply', { ...args, selection_id: selected.selection_id });
+      assert.ok(!response.isError, 'Actual Codex quickfix apply failed');
+      const result = JSON.parse(response.content[0].text);
+      assert.equal(result.status, 'applied'); assert.equal(result.command_effect.status, 'proven_noop');
+      assert.equal(result.diagnostics_status, 'received'); assert.equal(result.diagnostics.length, result.files.length);
+      assert.ok(result.diagnostics.every(d => d.status === 'received' && !d.diagnostics.some(e => e.code === 2304)));
+      assert.match(await readFile(path.join(work, args.file), 'utf8'), /import \{ square \} from/);
+      assert.equal((await call('code_action_apply', { ...args, selection_id: selected.selection_id })).isError, true, 'Repeat/stale quickfix must be rejected');
+    }
+    if (applications.includes('rename_apply')) {
+      const args = { file: 'apply-project/model.ts', line: 1, character: 14, new_name: 'NamedGreeter' };
+      const shown = await call('rename_preview', args);
+      const selected = JSON.parse(shown.content[0].text).result;
+      const beforeOther = await readFile(path.join(work, 'apply-project/unrelated.ts'), 'utf8');
+      const response = await call('rename_apply', { ...args, selection_id: selected.selection_id });
+      assert.ok(!response.isError, 'Actual Codex rename apply failed');
+      const result = JSON.parse(response.content[0].text);
+      assert.equal(result.status, 'applied'); assert.equal(result.files.length, 2);
+      assert.equal(result.diagnostics_status, 'received'); assert.equal(result.diagnostics.length, 2);
+      assert.match(await readFile(path.join(work, args.file), 'utf8'), /class NamedGreeter/);
+      assert.match(await readFile(path.join(work, 'apply-project/consumer.ts'), 'utf8'), /import \{ NamedGreeter \}/);
+      assert.equal(await readFile(path.join(work, 'apply-project/unrelated.ts'), 'utf8'), beforeOther);
+      assert.equal((await call('rename_apply', { ...args, selection_id: selected.selection_id })).isError, true, 'Repeat/stale rename must be rejected');
+    }
+    return { ...state, navigationTools: checked, applicationTools: applications };
   } finally { fail(new Error('Verification finished')); lines.close(); await stop(child); }
 }
 
@@ -271,8 +366,28 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     if (!installed) await mkdir(home, { recursive: true });
     await mkdir(path.join(work, 'node_modules'), { recursive: true });
     await symlink(options.typescript, path.join(work, 'node_modules/typescript'), process.platform === 'win32' ? 'junction' : 'dir');
-    await writeFile(path.join(work, 'tsconfig.json'), '{"compilerOptions":{"strict":true}}');
-    await writeFile(path.join(work, 'main.ts'), 'export function greet(name: string) { return name; }\ngreet("hello");\n');
+    const sources = {
+      'tsconfig.json': '{"compilerOptions":{"strict":true},"include":["*.ts"]}',
+      'main.ts': 'export function greet(name: string) { return name; }\ngreet("hello");\n',
+      'navigation.ts': 'export interface Greeter { greet(name: string): string; }\nexport class FriendlyGreeter implements Greeter { greet(name: string) { return name; } }\nexport class FormalGreeter implements Greeter { greet(name: string) { return "Hello " + name; } }\nexport function decorate(text: string) { return text; }\nexport const service: Greeter = new FriendlyGreeter();\nexport interface Unused { nothing(): void; }\n',
+      'empty.ts': '// No symbols here.\n',
+      'utils.ts': 'export function square(value: number) { return value * value; }\n',
+      'quickfix.ts': 'export const answer = square(2);\n',
+      'rename-user.ts': 'import { Greeter } from "./navigation";\nexport type Alias = Greeter;\n',
+      'sibling/tsconfig.json': '{"compilerOptions":{"strict":true},"include":["*.ts"]}',
+      'sibling/other.ts': 'export function SiblingSymbol() { return true; }\n',
+    };
+    for (const [file, text] of Object.entries(sources)) { await mkdir(path.dirname(path.join(work, file)), { recursive: true }); await writeFile(path.join(work, file), text); }
+    const applicationSources = {
+      'tsconfig.json': '{"compilerOptions":{"strict":true},"include":["*.ts"]}',
+      'quickfix.ts': 'export const answer = square(2);\n',
+      'utils.ts': 'export function square(value: number) { return value * value; }\n',
+      'model.ts': 'export class Greeter { value = 1; }\n',
+      'consumer.ts': 'import { Greeter } from "./model";\nexport const instance = new Greeter();\n',
+      'unrelated.ts': 'export function local() { class Greeter { value = 2; } return new Greeter(); }\n',
+    };
+    await mkdir(path.join(work, 'apply-project'));
+    for (const [file, text] of Object.entries(applicationSources)) await writeFile(path.join(work, 'apply-project', file), text);
     await writeFile(path.join(temp, 'models.json'), JSON.stringify({ models: [options.model] }), { mode: 0o600 });
     const env = cleanEnvironment(home);
     if (!installed) {
@@ -285,12 +400,14 @@ export async function runCodexVerification(options, { installed = false } = {}) 
       }
     }
     assert.ok(!interrupted, 'Verification interrupted');
-    const hook = await appServer(options, env, work, installed);
+    const { navigationTools: checked, applicationTools: applied, ...hook } = await appServer(options, env, work, installed);
+    for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Read-only MCP tools changed ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     const transition = await patchFixture(options, env, work, temp, installed);
+    for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }

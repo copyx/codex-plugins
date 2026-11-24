@@ -107,7 +107,7 @@ export class LspSession {
       const languageId = ext === '.tsx' ? 'typescriptreact' : ext === '.jsx' ? 'javascriptreact' : /\.[cm]?js$/.test(ext) ? 'javascript' : 'typescript';
       this.notify('textDocument/didOpen', { textDocument: { uri, languageId, version, text } });
     }
-    this.documents.set(uri, { version });
+    this.documents.set(uri, { version, text });
     return uri;
   }
 

@@ -1,7 +1,7 @@
 {
   "name": "typescript-lsp",
-  "version": "0.1.0",
-  "description": "Local TypeScript/JavaScript definition, references, hover, and post-patch diagnostics.",
+  "version": "0.2.0",
+  "description": "Local TypeScript/JavaScript navigation, edit previews, selected quickfix/rename application, and diagnostics.",
   "author": { "name": "copyx" },
   "repository": "https://github.com/copyx/codex-plugins",
   "license": "MIT",
@@ -10,9 +10,9 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "TypeScript LSP",
-    "shortDescription": "Local TypeScript and JavaScript code navigation",
+    "shortDescription": "TypeScript navigation, previews, and selected edits",
     "developerName": "copyx",
     "category": "Developer Tools",
-    "capabilities": ["Read"]
+    "capabilities": ["Read", "Write"]
   }
 }

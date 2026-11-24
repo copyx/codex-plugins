@@ -4,12 +4,24 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, stat, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { requireTrustedHook, verifyTransition, runProcess, runCodexVerification } from '../scripts/lib/codex-verification.mjs';
+import { requireTrustedHook, verifyTransition, runProcess, runCodexVerification, navigationTools } from '../scripts/lib/codex-verification.mjs';
 
 const hook = { pluginId: 'typescript-lsp@copyx-codex-plugins', eventName: 'postToolUse', enabled: true, trustStatus: 'trusted' };
 const request = texts => ({ input: texts.map(text => ({ role: 'developer', content: [{ type: 'input_text', text }] })) });
 const error = 'TypeScript LSP post-patch diagnostics (changed files only; disk snapshot):\nmain.ts:2:7: error TS2345 invalid argument';
 const clean = 'TypeScript LSP post-patch diagnostics (changed files only; disk snapshot):\nmain.ts: no diagnostics published for this snapshot';
+
+test('checkout verification requires added tools while older installed packages retain baseline coverage', () => {
+  const legacy = { definition: {}, references: {}, hover: {} };
+  assert.throws(() => navigationTools(legacy), /missing/);
+  assert.deepEqual(navigationTools(legacy, { installed: true }), ['definition', 'references', 'hover']);
+  const stageOne = { ...legacy, document_symbols: {}, type_definition: {}, implementation: {} };
+  assert.throws(() => navigationTools(stageOne), /missing/);
+  assert.deepEqual(navigationTools(stageOne, { installed: true }), ['definition', 'references', 'hover', 'document_symbols', 'type_definition', 'implementation']);
+  const current = { ...stageOne, project_symbols: {}, code_actions_preview: {}, rename_preview: {} };
+  assert.deepEqual(navigationTools(current), ['definition', 'references', 'hover', 'document_symbols', 'type_definition', 'implementation', 'project_symbols', 'code_actions_preview', 'rename_preview']);
+  assert.deepEqual(navigationTools(current, { installed: true }), navigationTools(current));
+});
 
 test('installed verification refuses missing, disabled, and untrusted hooks with actionable errors', () => {
   assert.throws(() => requireTrustedHook([]), /not installed|not discovered/);
