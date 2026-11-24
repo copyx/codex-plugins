@@ -211,13 +211,19 @@ async function appServer(options, env, work, installed, navigate = true) {
     if (options.python) {
       const pythonInventory = await rpc('mcpServerStatus/list', { threadId, serverName: 'python-lsp' });
       const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
-      assert.equal(pythonServer?.serverInfo?.version, '0.1.0');
+      const pythonManifest = JSON.parse(await readFile(path.join(repo, 'plugins/python-lsp/.codex-plugin/plugin.json'), 'utf8'));
+      assert.equal(pythonServer?.serverInfo?.version, pythonManifest.version);
       assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'hover', 'references']);
       for (const tool of ['definition', 'references', 'hover']) {
         assert.equal(pythonServer.tools[tool].annotations.readOnlyHint, true);
         const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file: 'main.py', line: 3, character: 2 } });
         assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
-        const data = JSON.parse(result.content[0].text).result;
+        const output = JSON.parse(result.content[0].text);
+        if (options.useRuntimeConfig) {
+          assert.equal(output.server.configuration_source, 'user_config');
+          assert.equal(output.server.executable, options.ty);
+        }
+        const data = output.result;
         if (tool === 'definition') assert.equal((data[0].range ?? data[0].targetSelectionRange).start.line, 0);
         if (tool === 'references') assert.ok(data.length >= 2);
         if (tool === 'hover') assert.match(data.contents.value, /name: str/);
@@ -446,7 +452,12 @@ export async function runCodexVerification(options, { installed = false } = {}) 
       await symlink(options.pythonEnv, path.join(work, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
       sources['main.py'] = 'def greet(name: str) -> str:\n    return name\ngreet("hello")\n';
       await writeFile(path.join(work, 'main.py'), sources['main.py']);
-      env.PYTHON_LSP_TY = options.ty;
+      if (options.useRuntimeConfig) {
+        env.HOME = path.join(temp, 'runtime-home');
+        const directory = path.join(env.HOME, '.config/codex-python-lsp');
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        await writeFile(path.join(directory, 'config.json'), JSON.stringify({ ty_path: options.ty }), { mode: 0o600 });
+      } else env.PYTHON_LSP_TY = options.ty;
     }
     if (!installed) {
       for (const args of [['plugin', 'marketplace', 'add', repo, '--json'], ['plugin', 'list', '--available', '--marketplace', 'copyx-codex-plugins', '--json'], ['plugin', 'add', pluginId, '--json'], ...(options.python ? [['plugin', 'add', 'python-lsp@copyx-codex-plugins', '--json']] : [])]) {

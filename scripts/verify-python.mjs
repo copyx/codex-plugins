@@ -10,7 +10,7 @@ try {
   const ty = await realpath(path.resolve(process.env.TEST_TY_BIN));
   const pythonEnv = await realpath(path.resolve(process.env.TEST_PYTHON_ENV));
   assert.ok((await stat(path.join(pythonEnv, 'pyvenv.cfg'))).isFile(), 'TEST_PYTHON_ENV must be a venv with pyvenv.cfg');
-  const options = { ...await prerequisites(), python: true, ty, pythonEnv };
+  const options = { ...await prerequisites(), python: true, ty, pythonEnv, useRuntimeConfig: process.env.TEST_PYTHON_RUNTIME_CONFIG === '1' };
   const trusted = process.argv.includes('--trusted-profile');
   if (trusted) {
     assert.ok(process.env.TEST_CODEX_PROFILE, 'Set TEST_CODEX_PROFILE to a separately installed and reviewed temporary Codex profile');

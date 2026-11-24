@@ -10,7 +10,7 @@ const tools = Object.keys(methods).map(name => ({
 }));
 let active;
 async function dispatch(message) {
-  if (message.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'python-lsp', version: '0.1.0' } };
+  if (message.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'python-lsp', version: '0.1.1' } };
   if (message.method === 'ping') return {};
   if (message.method === 'resources/list') return { resources: [] };
   if (message.method === 'resources/templates/list') return { resourceTemplates: [] };
@@ -25,7 +25,7 @@ async function dispatch(message) {
     const uri = await active.sync(project.file), position = active.position(uri, args.line, args.character);
     const params = { textDocument: { uri }, position, ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
     const result = await markLocations(await active.request(methods[name], params), project.workspace);
-    const output = { workspace_root: project.workspace, project_root: project.root, config: project.config, environment: project.environment, server: { name: 'ty', version: '0.0.109' }, result };
+    const output = { workspace_root: project.workspace, project_root: project.root, config: project.config, environment: project.environment, server: { name: 'ty', version: '0.0.109', executable: active.command, configuration_source: active.runtime.source }, result };
     const text = JSON.stringify(output);
     if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');
     return { content: [{ type: 'text', text }] };

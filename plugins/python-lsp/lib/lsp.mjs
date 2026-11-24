@@ -3,12 +3,13 @@ import { realpath } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { boundedText, inside, supported } from './project.mjs';
+import { resolveTyRuntime } from './runtime.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const MAX_FRAME = 8 * 1024 * 1024;
 const bundle = fileURLToPath(new URL('../', import.meta.url));
 export class LspSession {
-  constructor(project, { timeoutMs = 8000, diagnosticMs = 6000, settleMs = 100, command = process.env.PYTHON_LSP_TY, checkVersion = true, requireCapabilities = true } = {}) {
+  constructor(project, { timeoutMs = 8000, diagnosticMs = 6000, settleMs = 100, command, checkVersion = true, requireCapabilities = true } = {}) {
     Object.assign(this, { project, timeoutMs, diagnosticMs, settleMs, command, checkVersion, requireCapabilities });
     this.pending = new Map(); this.documents = new Map(); this.publications = new Map();
     this.buffer = Buffer.alloc(0); this.sequence = 0; this.id = 0;
@@ -17,14 +18,17 @@ export class LspSession {
   }
   async start() {
     if (this.closed) throw new Error('LSP session closed');
-    if (!this.command || !path.isAbsolute(this.command)) throw new Error('Set PYTHON_LSP_TY to the absolute installed ty 0.0.109 executable path; no automatic install or PATH fallback');
+    this.runtime = this.command === undefined ? await resolveTyRuntime() : { command: this.command, source: 'explicit_command', config: null };
+    this.command = this.runtime.command;
+    if (!this.command || !path.isAbsolute(this.command)) throw new Error('ty executable must be an absolute path; no automatic install or PATH fallback');
     const env = {};
     for (const key of ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'SystemRoot', 'LANG', 'LC_ALL']) if (process.env[key]) env[key] = process.env[key];
     Object.assign(env, { VIRTUAL_ENV: this.project.environment.path, XDG_CONFIG_HOME: path.join(bundle, '.no-user-config'), APPDATA: path.join(bundle, '.no-user-config') });
     if (this.checkVersion) {
       const result = spawnSync(this.command, ['--version'], { env, encoding: 'utf8', timeout: 2000, maxBuffer: 8192 });
-      if (result.error || result.status !== 0) throw new Error(`Cannot execute PYTHON_LSP_TY (${result.error?.code ?? result.status}); install ty 0.0.109 separately`);
-      if (!/^ty 0\.0\.109(?:\s|$)/.test(result.stdout)) throw new Error(`PYTHON_LSP_TY must be ty 0.0.109; found ${result.stdout.trim().slice(0, 160)}`);
+      const label = this.runtime.source === 'environment' ? 'PYTHON_LSP_TY' : this.runtime.config ?? 'ty executable';
+      if (result.error || result.status !== 0) throw new Error(`Cannot execute ${label} (${result.error?.code ?? result.status}); install ty 0.0.109 separately`);
+      if (!/^ty 0\.0\.109(?:\s|$)/.test(result.stdout)) throw new Error(`${label} must be ty 0.0.109; found ${result.stdout.trim().slice(0, 160)}`);
     }
     this.child = spawn(this.command, ['server'], { cwd: this.project.root, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stderr.on('data', b => { this.stderr = ((this.stderr ?? '') + b).slice(-4000); });
@@ -33,7 +37,7 @@ export class LspSession {
     this.child.on('exit', (code, signal) => this.fail(new Error(`ty server exited (${code ?? signal}): ${this.stderr ?? ''}`)));
     this.child.stdout.on('data', b => { try { this.consume(b); } catch (e) { this.fail(e); this.kill(); } });
     const initialized = await this.request('initialize', {
-      processId: process.pid, clientInfo: { name: 'codex-python-lsp', version: '0.1.0' },
+      processId: process.pid, clientInfo: { name: 'codex-python-lsp', version: '0.1.1' },
       rootUri: pathToFileURL(this.project.root).href,
       workspaceFolders: [{ uri: pathToFileURL(this.project.root).href, name: path.basename(this.project.root) }],
       capabilities: { general: { positionEncodings: ['utf-16'] }, workspace: { configuration: true, workspaceFolders: true },

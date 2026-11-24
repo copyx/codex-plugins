@@ -8,7 +8,8 @@
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.
 TS 플러그인이나 저장소 scripts를 runtime import하지 않는다. Node 내장 모듈만 사용하며
-서버 실행 파일은 `PYTHON_LSP_TY`의 절대 경로를 요구하고 실행 전 정확한 버전을 확인한다.
+서버 실행 파일은 `PYTHON_LSP_TY` 또는 0.1.1의 사용자 전용 JSON에 명시된 절대 경로를 요구하고
+실행 전 정확한 버전을 확인한다. [GUI 런타임 설정](python-lsp-runtime-settings.md)에 후속 변경을 기록했다.
 고정 서버 명령은 `ty server`이며 `--stdio` 같은 TS 전용 인자는 붙이지 않는다.
 
 워크스페이스 경계·선택 프로젝트·ty 설정·분석 venv·서버 실행물은 별도로 관리한다.

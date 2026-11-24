@@ -1,6 +1,6 @@
 {
   "name": "python-lsp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local Python definition, references, hover, and post-patch type diagnostics with ty 0.0.109.",
   "author": { "name": "copyx" },
   "repository": "https://github.com/copyx/codex-plugins",

@@ -1,5 +1,8 @@
 # Python 0.1.0 브랜치 설치 기록
 
+이 문서는 최초 0.1.0 설치의 당시 기록이다. GUI 환경 누락을 해결한 0.1.1의 현재 설정은
+[런타임 설정 후속](python-lsp-runtime-settings.md)을 참고한다.
+
 2026-11-24, Orca #65·#66. `copyx/python-lsp` 브랜치의
 [`560f131d91f3dd039a0a14eb882d3f70f080e2da`](https://github.com/copyx/codex-plugins/commit/560f131d91f3dd039a0a14eb882d3f70f080e2da)에
 구현·테스트·문서 22파일을 커밋하고 일반 push했다. 원격 branch SHA가 일치했고

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveProject } from '../plugins/python-lsp/lib/project.mjs';
 import { LspSession } from '../plugins/python-lsp/lib/lsp.mjs';
+import { runtimeConfigPath } from '../plugins/python-lsp/lib/runtime.mjs';
 
 const ty = process.env.TEST_TY_BIN;
 const pythonEnv = process.env.TEST_PYTHON_ENV;
@@ -79,7 +80,7 @@ test('Python actual MCP lists only three read-only tools; Unicode CRLF and .pyi 
     message(11, 'hover', { ...args, character: 11 }), // splitting the emoji surrogate pair
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
-  assert.equal(output[0].result.serverInfo.version, '0.1.0');
+  assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
   assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
@@ -199,4 +200,45 @@ test('Python no-config workspace does not inherit parent ty rules across its bou
   const result = (await s.diagnostics([project.file]))[0];
   assert.equal(result.status, 'received');
   assert.ok(result.diagnostics.some(d => d.code === 'invalid-argument-type'));
+});
+test('Python MCP and hook use the same Node-home runtime settings without PYTHON_LSP_TY', real, async t => {
+  const root=await fixture(t), home=await realpath(await mkdtemp(path.join(tmpdir(),'python-entry-home-')));
+  t.after(()=>rm(home,{recursive:true,force:true}));
+  await mkdir(path.dirname(runtimeConfigPath(home)),{recursive:true,mode:0o700});
+  await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:ty}),{mode:0o600});
+  const env={HOME:home,PYTHON_LSP_TY:undefined};
+  const args={workspace_root:root,file:'main.py',line:2,character:2};
+  const result=JSON.parse((await entry(root,'server.mjs',JSON.stringify(message(1,'hover',args))+'\n',plugin,env)).trim()).result;
+  assert.ok(!result.isError,JSON.stringify(result));
+  const data=JSON.parse(result.content[0].text);
+  assert.equal(data.server.executable,ty);assert.equal(data.server.configuration_source,'user_config');
+  await writeFile(path.join(root,'main.py'),'from lib import greet\ngreet(123)\n');
+  const event={cwd:root,hook_event_name:'PostToolUse',tool_name:'apply_patch',tool_input:'*** Update File: main.py'};
+  const context=JSON.parse(await entry(root,'hooks/post-tool-use.mjs',JSON.stringify(event),plugin,env)).hookSpecificOutput.additionalContext;
+  assert.match(context,/ty invalid-argument-type/);
+  const overridden=JSON.parse((await entry(root,'server.mjs',JSON.stringify(message(1,'hover',args))+'\n',plugin,{...env,PYTHON_LSP_TY:path.join(root,'missing-ty')})).trim()).result;
+  assert.equal(overridden.isError,true);assert.match(overridden.content[0].text,/PYTHON_LSP_TY/);
+  const wrong=path.join(root,'wrong-ty');await writeFile(wrong,'#!/usr/bin/env node\nconsole.log("ty 0.0.108");\n');await chmod(wrong,0o755);
+  await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:wrong}));
+  const version=JSON.parse((await entry(root,'server.mjs',JSON.stringify(message(1,'hover',args))+'\n',plugin,env)).trim()).result;
+  assert.equal(version.isError,true);assert.match(version.content[0].text,/config.json must be ty 0.0.109/);
+});
+test('Python running MCP bridge rereads runtime settings on each tool call without restarting', real, async t => {
+  const root=await fixture(t), home=await realpath(await mkdtemp(path.join(tmpdir(),'python-live-home-')));
+  t.after(()=>rm(home,{recursive:true,force:true}));
+  await mkdir(path.dirname(runtimeConfigPath(home)),{recursive:true,mode:0o700});
+  await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:ty}),{mode:0o600});
+  const {spawn}=await import('node:child_process'),{createInterface}=await import('node:readline');
+  const child=spawn(process.execPath,[path.join(plugin,'server.mjs')],{cwd:root,env:{...process.env,HOME:home,PYTHON_LSP_TY:undefined}});
+  child.stderr.resume();const lines=createInterface({input:child.stdout});
+  t.after(()=>{lines.close();child.kill();});
+  async function call(id){
+    const response=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('MCP test response timeout')),10000);lines.once('line',line=>{clearTimeout(timer);resolve(JSON.parse(line).result);});});
+    child.stdin.write(JSON.stringify(message(id,'hover',{workspace_root:root,file:'main.py',line:2,character:2}))+'\n');return response;
+  }
+  assert.ok(!(await call(1)).isError);
+  await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:path.join(root,'missing-ty')}));
+  assert.equal((await call(2)).isError,true);
+  await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:ty}));
+  assert.ok(!(await call(3)).isError);assert.equal(child.exitCode,null);
 });
