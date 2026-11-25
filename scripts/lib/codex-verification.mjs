@@ -213,10 +213,11 @@ async function appServer(options, env, work, installed, navigate = true) {
       const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
       const pythonManifest = JSON.parse(await readFile(path.join(repo, 'plugins/python-lsp/.codex-plugin/plugin.json'), 'utf8'));
       assert.equal(pythonServer?.serverInfo?.version, pythonManifest.version);
-      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'hover', 'references']);
-      for (const tool of ['definition', 'references', 'hover']) {
+      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'document_symbols', 'hover', 'references']);
+      for (const tool of ['definition', 'references', 'hover', 'document_symbols']) {
         assert.equal(pythonServer.tools[tool].annotations.readOnlyHint, true);
-        const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file: 'main.py', line: 3, character: 2 } });
+        const arguments_ = tool === 'document_symbols' ? { workspace_root: work, file: 'symbols.py' } : { workspace_root: work, file: 'main.py', line: 3, character: 2 };
+        const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: arguments_ });
         assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
         const output = JSON.parse(result.content[0].text);
         if (options.useRuntimeConfig) {
@@ -227,6 +228,14 @@ async function appServer(options, env, work, installed, navigate = true) {
         if (tool === 'definition') assert.equal((data[0].range ?? data[0].targetSelectionRange).start.line, 0);
         if (tool === 'references') assert.ok(data.length >= 2);
         if (tool === 'hover') assert.match(data.contents.value, /name: str/);
+        if (tool === 'document_symbols') {
+          assert.deepEqual(pythonServer.tools[tool].inputSchema.required, ['workspace_root', 'file']);
+          const greeter = data.find(s => s.name === 'Greeter');
+          assert.equal(greeter.kind, 5); assert.equal(greeter.children.find(s => s.name === 'greet').kind, 6);
+          assert.equal(data.find(s => s.name === 'decorate').kind, 12);
+          const empty = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file: 'empty.py' } });
+          assert.ok(!empty.isError); assert.deepEqual(JSON.parse(empty.content[0].text).result, []);
+        }
       }
     }
     const bundleRoot = path.dirname(path.dirname(hook.sourcePath));
@@ -451,7 +460,9 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     if (options.python) {
       await symlink(options.pythonEnv, path.join(work, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
       sources['main.py'] = 'def greet(name: str) -> str:\n    return name\ngreet("hello")\n';
-      await writeFile(path.join(work, 'main.py'), sources['main.py']);
+      sources['symbols.py'] = 'class Greeter:\n    def greet(self, name: str) -> str:\n        return name\n\ndef decorate(text: str) -> str:\n    return text\n';
+      sources['empty.py'] = '# No symbols here.\n';
+      for (const file of ['main.py', 'symbols.py', 'empty.py']) await writeFile(path.join(work, file), sources[file]);
       if (options.useRuntimeConfig) {
         env.HOME = path.join(temp, 'runtime-home');
         const directory = path.join(env.HOME, '.config/codex-python-lsp');
@@ -476,7 +487,7 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }

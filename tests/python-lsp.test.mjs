@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists only three read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists four read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,7 +81,7 @@ test('Python actual MCP lists only three read-only tools; Unicode CRLF and .pyi 
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover']);
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
@@ -107,7 +107,9 @@ test('Python request and diagnostic deadlines reap unresponsive children; missin
   const root = await fixture(t), command = path.join(root, 'silent-lsp');
   await cp(new URL('./fixtures/silent-lsp.mjs', import.meta.url), command); await chmod(command, 0o755);
   const p = { root, file: path.join(root, 'main.py'), workspace: root, environment: { path: root } };
-  const s = new LspSession(p, { command, checkVersion: false, timeoutMs: 500, diagnosticMs: 80, requireCapabilities: false });
+  // Allow the fixture's Node process to start under suite load. Diagnostic and
+  // unanswered-request deadlines below remain independent of this startup wait.
+  const s = new LspSession(p, { command, checkVersion: false, timeoutMs: 2000, diagnosticMs: 80, requireCapabilities: false });
   t.after(() => s.close()); await s.start();
   assert.equal((await s.diagnostics([p.file]))[0].status, 'timeout');
   await assert.rejects(s.request('unanswered', {}, 30), /timeout/);
@@ -241,4 +243,77 @@ test('Python running MCP bridge rereads runtime settings on each tool call witho
   assert.equal((await call(2)).isError,true);
   await writeFile(runtimeConfigPath(home),JSON.stringify({ty_path:ty}));
   assert.ok(!(await call(3)).isError);assert.equal(child.exitCode,null);
+});
+test('Python document_symbols MCP accepts file-only input and preserves real ty hierarchy, UTF-16 ranges and empty results', real, async t => {
+  const root=await fixture(t);
+  const source='class Greeter:\r\n    def greet(self, name: str) -> str:\r\n        return name\r\n\r\ndef decorate(text: str) -> str:\r\n    return text\r\n\r\ndef 𐐀function():\r\n    pass\r\n';
+  await writeFile(path.join(root,'symbols.py'),source);
+  await writeFile(path.join(root,'api.pyi'),'class Api:\n    def read(self, name: str) -> str: ...\n');
+  await writeFile(path.join(root,'empty.py'),'# 😀 no symbols\r\n');
+  await symlink('/etc/hosts',path.join(root,'escape.py'));
+  const args={workspace_root:root,file:'symbols.py'};
+  const requests=[{jsonrpc:'2.0',id:1,method:'tools/list'},message(2,'document_symbols',args),message(3,'document_symbols',{...args,file:'empty.py'}),message(4,'document_symbols',{...args,file:'api.pyi'}),message(5,'document_symbols',{...args,file:'../outside.py'}),message(6,'document_symbols',{...args,file:'escape.py'}),message(7,'document_symbols',{...args,line:1,character:1})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const tool=responses[0].result.tools.find(t=>t.name==='document_symbols');
+  assert.ok(tool,'document_symbols must be advertised');
+  assert.deepEqual(tool.inputSchema.required,['workspace_root','file']);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties),['workspace_root','file']);
+  assert.equal(tool.annotations.readOnlyHint,true);assert.equal(tool.annotations.destructiveHint,false);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text).result;};
+  const symbols=value(2),greeter=symbols.find(s=>s.name==='Greeter'),decorate=symbols.find(s=>s.name==='decorate');
+  assert.equal(greeter.kind,5);assert.equal(greeter.selectionRange.start.line,0);
+  const greet=greeter.children.find(s=>s.name==='greet');assert.equal(greet.kind,6);assert.equal(greet.range.start.line,1);assert.equal(greet.selectionRange.start.character,8);
+  assert.equal(decorate.kind,12);assert.equal(decorate.selectionRange.start.line,4);
+  const unicode=symbols.find(s=>s.name==='𐐀function');
+  assert.equal(unicode.selectionRange.end.character-unicode.selectionRange.start.character,'𐐀function'.length);
+  assert.deepEqual(value(3),[]);assert.equal(value(4).find(s=>s.name==='Api').children[0].name,'read');
+  for(const id of [5,6,7])assert.equal(responses.find(r=>r.id===id).result.isError,true);
+  const project=await resolveProject('symbols.py',root,{env:{}}),session=new LspSession(project,{command:ty});t.after(()=>session.close());
+  await session.start();const uri=await session.sync(project.file);
+  assert.deepEqual(symbols,await session.request('textDocument/documentSymbol',{textDocument:{uri}}),'MCP must preserve every original LSP field and hierarchy');
+  assert.equal(await readFile(project.file,'utf8'),source);
+});
+test('Python document_symbols preserves flat SymbolInformation and distinguishes null, unsupported capability and LSP error', async t => {
+  const root=await fixture(t);
+  const command=path.join(root,'fixture-ty');
+  const fake=String.raw`#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('ty 0.0.109'); process.exit(0); }
+let buffer = Buffer.alloc(0);
+const mode = FIXTURE_SYMBOL_MODE;
+function send(message) {
+  const body = JSON.stringify(message);
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body);
+}
+process.stdin.on('data', chunk => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const end = buffer.indexOf('\r\n\r\n');
+    if (end < 0) return;
+    const length = Number(/Content-Length: (\d+)/i.exec(buffer.subarray(0, end).toString())[1]);
+    if (buffer.length < end + 4 + length) return;
+    const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length));
+    buffer = buffer.subarray(end + 4 + length);
+    if (message.method === 'initialize') {
+      send({ jsonrpc:'2.0', id:message.id, result:{ capabilities:{ definitionProvider:true, referencesProvider:true, hoverProvider:true, documentSymbolProvider:mode !== 'unsupported' } } });
+    } else if (message.method === 'textDocument/documentSymbol') {
+      if (mode === 'error') send({ jsonrpc:'2.0', id:message.id, error:{ code:-32601, message:'documentSymbol unavailable' } });
+      else {
+        const flat = [{ name:'FlatSymbol', kind:12, containerName:'module', location:{ uri:message.params.textDocument.uri, range:{ start:{ line:0, character:0 }, end:{ line:0, character:1 } } }, deprecated:false }];
+        send({ jsonrpc:'2.0', id:message.id, result:mode === 'null' ? null : mode === 'invalid' ? { unexpected:true } : flat });
+      }
+    } else if (message.method === 'shutdown') send({ jsonrpc:'2.0', id:message.id, result:null });
+    else if (message.method === 'exit') process.exit(0);
+  }
+});
+`;
+  await writeFile(command,fake);await chmod(command,0o755);
+  if(!pythonEnv){await mkdir(path.join(root,'.venv/bin'),{recursive:true});await writeFile(path.join(root,'.venv/pyvenv.cfg'),'version = 3.15.2');await symlink(process.execPath,path.join(root,'.venv/bin/python'));}
+  const request=JSON.stringify(message(1,'document_symbols',{workspace_root:root,file:'main.py'}))+'\n';
+  const call=async mode=>{await writeFile(command,fake.replace('FIXTURE_SYMBOL_MODE',JSON.stringify(mode)));return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;};
+  const flat=await call('flat');assert.ok(!flat.isError,JSON.stringify(flat));
+  assert.deepEqual(JSON.parse(flat.content[0].text).result,[{name:'FlatSymbol',kind:12,containerName:'module',location:{uri:`file://${root}/main.py`,range:{start:{line:0,character:0},end:{line:0,character:1}}},deprecated:false}]);
+  assert.deepEqual(JSON.parse((await call('null')).content[0].text).result,[]);
+  const unsupported=await call('unsupported');assert.equal(unsupported.isError,true);assert.match(unsupported.content[0].text,/documentSymbol|document_symbols/);
+  const error=await call('error');assert.equal(error.isError,true);assert.match(error.content[0].text,/-32601.*unavailable/);
+  const invalid=await call('invalid');assert.equal(invalid.isError,true);assert.match(invalid.content[0].text,/documentSymbol.*array or null/);
 });

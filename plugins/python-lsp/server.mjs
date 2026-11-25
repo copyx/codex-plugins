@@ -2,11 +2,15 @@ import { createInterface } from 'node:readline';
 import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol' };
+const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
+const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
 const tools = Object.keys(methods).map(name => ({
-  name, description: `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
+  name, description: name === 'document_symbols'
+    ? 'List symbols in one local .py/.pyi file using ty 0.0.109. Use absolute workspace_root and file, without line/character. Preserves hierarchical LSP DocumentSymbol children or flat SymbolInformation with 0-based UTF-16 ranges. Returns [] when no symbols exist. Read-only.'
+    : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  inputSchema: { type: 'object', additionalProperties: false, properties: { workspace_root: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } }, required: ['workspace_root', 'file', 'line', 'character'] },
+  inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(name === 'document_symbols' ? {} : positionFields) }, required: ['workspace_root', 'file', ...(name === 'document_symbols' ? [] : ['line', 'character'])] },
 }));
 let active;
 async function dispatch(message) {
@@ -19,12 +23,18 @@ async function dispatch(message) {
   try {
     const { name, arguments: args } = message.params ?? {};
     if (!Object.hasOwn(methods, name)) throw new Error('Unknown tool');
-    if (!args || Object.keys(args).some(k => !['workspace_root', 'file', 'line', 'character'].includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string' || !Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1) throw new Error('Expected only workspace_root, file, and positive integer line/character');
+    const documentSymbols = name === 'document_symbols';
+    const allowed = documentSymbols ? ['workspace_root', 'file'] : ['workspace_root', 'file', 'line', 'character'];
+    if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
+    if (!documentSymbols && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
     const project = await resolveProject(args.file, args.workspace_root);
     active = new LspSession(project); await active.start();
-    const uri = await active.sync(project.file), position = active.position(uri, args.line, args.character);
-    const params = { textDocument: { uri }, position, ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
-    const result = await markLocations(await active.request(methods[name], params), project.workspace);
+    if (documentSymbols && !active.capabilities.documentSymbolProvider) throw new Error('ty server does not support textDocument/documentSymbol');
+    const uri = await active.sync(project.file);
+    const params = { textDocument: { uri }, ...(documentSymbols ? {} : { position: active.position(uri, args.line, args.character) }), ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
+    const response = await active.request(methods[name], params);
+    if (documentSymbols && response !== null && !Array.isArray(response)) throw new Error('Invalid documentSymbol response: expected array or null');
+    const result = documentSymbols ? response ?? [] : await markLocations(response, project.workspace);
     const output = { workspace_root: project.workspace, project_root: project.root, config: project.config, environment: project.environment, server: { name: 'ty', version: '0.0.109', executable: active.command, configuration_source: active.runtime.source }, result };
     const text = JSON.stringify(output);
     if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');

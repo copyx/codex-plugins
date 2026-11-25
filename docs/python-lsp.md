@@ -4,6 +4,25 @@
 0~1단계만 구현했다. 사용자 안내는 [Python README](../plugins/python-lsp/README.md)에 있다.
 커밋·푸시·PR·병합이나 사용자 Codex 설치/설정/신뢰 변경은 이 작업에 포함하지 않는다.
 
+## 후속 문서 심볼 — Orca #69
+
+`document_symbols(workspace_root,file)`을 추가했다. 위치 입력이 없는 파일 단위 읽기 전용 도구이며
+ty `textDocument/documentSymbol`을 호출한다. client는 hierarchicalDocumentSymbolSupport를 광고한다.
+선택된 서버가 documentSymbolProvider를 제공하지 않으면 오류로 반환하고 LSP 요청 오류도 전파한다.
+null/빈 정상은 `[]`로 통일하되, 원래 DocumentSymbol children/이름/kind/range/selectionRange 또는
+flat SymbolInformation 형식을 변환하거나 flatten하지 않는다. 입력의 기존 프로젝트·파일 경계는 재사용한다.
+
+실제 ty의 클래스/메서드/함수, .pyi, CRLF/비-BMP 식별자 범위, 빈 파일, traversal/symlink 거부를 검사하고
+직접 LSP 응답과 MCP 결과 전체를 비교한다. flat/null/미지원/요청 오류는 stdio 서버 fixture로 계약을 검사한다.
+정확한 Python MCP 목록은 4개로 갱신하며 격리 Codex에서 목록/호출과 기존 혼합 훅 회귀도 재검증한다.
+릴리스 버전 정리는 후속 통합 항목에서 수행한다. 이 항목은 사용자 설치·신뢰·push를 변경하지 않는다.
+
+2026-11-25 검증: `npm run verify:python` 33개와 `npm run verify`의 기존 TS 49개가
+실패/건너뜀 없이 통과했다. 실제 격리 Codex에서 Python 4개·TS 11개 목록/호출,
+혼합 패치 2회·모델 요청 3회와 언어별 오류 컨텍스트 1개→수정 후 새 컨텍스트 2개를 확인했다.
+정적 검사 53파일과 `git diff --check`도 통과했다. 기본 격리 검증의 일회성 훅 신뢰 생략은
+임시 프로필에만 적용했고 사용자 프로필의 설치·설정·신뢰는 변경하지 않았다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.

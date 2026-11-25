@@ -42,7 +42,7 @@ export class LspSession {
       workspaceFolders: [{ uri: pathToFileURL(this.project.root).href, name: path.basename(this.project.root) }],
       capabilities: { general: { positionEncodings: ['utf-16'] }, workspace: { configuration: true, workspaceFolders: true },
         textDocument: { synchronization: { didSave: false }, publishDiagnostics: { relatedInformation: true, versionSupport: true },
-          definition: { linkSupport: true }, hover: { contentFormat: ['markdown', 'plaintext'] } } },
+          definition: { linkSupport: true }, hover: { contentFormat: ['markdown', 'plaintext'] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true } } },
       initializationOptions: { untrustedWorkspace: true, experimental: { useUv: 'off' }, settings: this.settings },
     });
     this.capabilities = initialized.capabilities ?? {};
