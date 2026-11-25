@@ -29,6 +29,7 @@ export class LspSession {
       const label = this.runtime.source === 'environment' ? 'PYTHON_LSP_TY' : this.runtime.config ?? 'ty executable';
       if (result.error || result.status !== 0) throw new Error(`Cannot execute ${label} (${result.error?.code ?? result.status}); install ty 0.0.109 separately`);
       if (!/^ty 0\.0\.109(?:\s|$)/.test(result.stdout)) throw new Error(`${label} must be ty 0.0.109; found ${result.stdout.trim().slice(0, 160)}`);
+      this.serverVersion = result.stdout.trim();
     }
     this.child = spawn(this.command, ['server'], { cwd: this.project.root, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stderr.on('data', b => { this.stderr = ((this.stderr ?? '') + b).slice(-4000); });
@@ -42,7 +43,8 @@ export class LspSession {
       workspaceFolders: [{ uri: pathToFileURL(this.project.root).href, name: path.basename(this.project.root) }],
       capabilities: { general: { positionEncodings: ['utf-16'] }, workspace: { configuration: true, workspaceFolders: true },
         textDocument: { synchronization: { didSave: false }, publishDiagnostics: { relatedInformation: true, versionSupport: true },
-          definition: { linkSupport: true }, typeDefinition: { linkSupport: true }, implementation: { linkSupport: true }, hover: { contentFormat: ['markdown', 'plaintext'] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true } } },
+          definition: { linkSupport: true }, typeDefinition: { linkSupport: true }, implementation: { linkSupport: true }, hover: { contentFormat: ['markdown', 'plaintext'] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix'] } }, disabledSupport: true } } },
       initializationOptions: { untrustedWorkspace: true, experimental: { useUv: 'off' }, settings: this.settings },
     });
     this.capabilities = initialized.capabilities ?? {};

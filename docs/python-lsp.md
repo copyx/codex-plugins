@@ -92,6 +92,20 @@ client implementation.linkSupport=true를 광고한다. Location 단일/배열·
 실제 격리 Codex에서 Python 7개·TS 11개 목록/호출, 클래스/멤버 복수 구현과 빈 결과,
 혼합 패치 2회·모델 요청 3회·언어별 새 오류/정상 결과를 확인했다. 정적 53파일과 diff 검사도 통과했다.
 
+## 후속 빠른 수정 미리보기 — Orca #73
+
+code_actions_preview의 새 진단 연결·범위·상태·선택 ID/basis와 파일 읽기 정책은
+[미리보기 계약](python-lsp-previews.md)을 따른다. TS 패턴을 참고한 필요한 코드를 독립 Python 번들에 두며
+다른 플러그인이나 저장소 밖 runtime 코드를 import하지 않는다.
+실제 ty 0.0.109에서 누락 import의 즉시 편집과 별도 ignore 억제 후보를 구분했다.
+같은 canonical 요청의 새 세션 반복에서 두 후보의 ID가 같았고 소스는 바뀌지 않았다.
+command-only/명령 포함/disabled/deferred/resource 및 미지원/오류/진단 미수신은 통제된 stdio fixture 증거다.
+fixture는 client가 command/resolve를 호출하지 않고 서버 applyEdit도 거부하는 것을 기록한다.
+
+2026-11-25 검증: Python 48개·기존 TS 49개, 실패/건너뜀 0.
+실제 격리 Codex에서 Python 8개·TS 11개와 import/억제 후보·반복 ID, 혼합 패치 2회·모델 요청 3회를 확인했다.
+독립 Python 캐시 11파일 일치, 정적 57파일과 `git diff --check`도 통과했다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.

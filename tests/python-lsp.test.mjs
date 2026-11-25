@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists seven read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists eight read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,7 +81,7 @@ test('Python actual MCP lists seven read-only tools; Unicode CRLF and .pyi calls
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation']);
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
@@ -448,4 +448,41 @@ test('Python implementation preserves abstract base and multiple class/member im
   const canonical=result=>result.map(({workspace_boundary,...location})=>location).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
   assert.deepEqual(canonical(locations),canonical(raw));
   for(const[file,text]of Object.entries(sources))assert.equal(await readFile(path.join(root,file),'utf8'),text);
+});
+test('Python code_actions_preview uses fresh ty diagnostics, import/suppression edits and stable new-session IDs without writes',real,async t=>{
+  const root=await fixture(t),line='emoji = "😀"; answer = square(2)',source=line+'\r\n';
+  await writeFile(path.join(root,'quickfix.py'),source);await writeFile(path.join(root,'src/utils.py'),'def square(value: int) -> int:\n    return value * value\n');await writeFile(path.join(root,'clean.py'),'# no diagnostics or fixes\n');
+  const start=line.indexOf('square')+1,args={workspace_root:root,file:'quickfix.py',range:{start:{line:1,character:start},end:{line:1,character:start+6}}};
+  const requests=[{jsonrpc:'2.0',id:1,method:'tools/list'},message(2,'code_actions_preview',args),message(3,'code_actions_preview',{...args,file:path.join(root,'quickfix.py')}),message(4,'code_actions_preview',{...args,file:'clean.py',range:{start:{line:1,character:1},end:{line:1,character:1}}}),message(5,'code_actions_preview',{...args,range:{start:args.range.end,end:args.range.start}}),message(6,'code_actions_preview',{...args,file:'../outside.py'}),message(7,'code_actions_preview',{...args,line:1})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const tool=responses[0].result.tools.find(t=>t.name==='code_actions_preview');assert.ok(tool,'code_actions_preview must be advertised');
+  assert.deepEqual(tool.inputSchema.required,['workspace_root','file','range']);assert.equal(tool.annotations.readOnlyHint,true);assert.equal(tool.annotations.destructiveHint,false);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text);};
+  const first=value(2),second=value(3);assert.equal(first.diagnostics_status,'received');assert.ok(first.diagnostics.some(d=>d.code==='unresolved-reference'));
+  const imported=first.result.find(a=>a.category==='import'),suppression=first.result.find(a=>a.category==='suppression');
+  assert.ok(imported,'real ty import fix required');assert.ok(suppression,'real ty suppression must remain distinct');
+  assert.equal(imported.status,'edit_available');assert.equal(imported.preview_only,true);assert.ok(imported.edit.files.some(f=>f.edits.some(e=>/from utils import square/.test(e.new_text))));
+  assert.match(imported.selection_id,/^sha256:[a-f0-9]{64}$/);assert.equal(imported.selection_id,second.result.find(a=>a.title===imported.title).selection_id);
+  for(const candidate of first.result)assert.equal(candidate.selection_id,second.result.find(a=>a.action_fingerprint===candidate.action_fingerprint)?.selection_id);
+  assert.equal(imported.basis.request.file,path.join(root,'quickfix.py'));assert.equal(imported.basis.scope.project_root,root);assert.ok(imported.basis.server.executable_sha256);
+  assert.deepEqual(value(4).result,[]);assert.deepEqual(value(4).diagnostics,[]);
+  for(const id of [5,6,7])assert.equal(responses.find(r=>r.id===id).result.isError,true);
+  assert.equal(await readFile(path.join(root,'quickfix.py'),'utf8'),source);assert.equal(await readFile(path.join(root,'src/utils.py'),'utf8'),'def square(value: int) -> int:\n    return value * value\n');
+});
+test('Python code_actions_preview normal MCP distinguishes unavailable/incomplete/errors and never executes deferred or command/resource actions',{timeout:30000},async t=>{
+  const root=await fixture(t),command=path.join(root,'fixture-actions.mjs');
+  await cp(new URL('./fixtures/python-code-actions-lsp.mjs',import.meta.url),command);await chmod(command,0o755);
+  if(!pythonEnv){await mkdir(path.join(root,'.venv/bin'),{recursive:true});await writeFile(path.join(root,'.venv/pyvenv.cfg'),'version = 3.15.2');await symlink(process.execPath,path.join(root,'.venv/bin/python'));}
+  const original=await readFile(path.join(root,'main.py'),'utf8');
+  const request=JSON.stringify(message(1,'code_actions_preview',{workspace_root:root,file:'main.py',range:{start:{line:1,character:1},end:{line:1,character:8}}}))+'\n';
+  const call=async mode=>{await writeFile(path.join(root,'preview-mode'),mode);return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;};
+  const result=await call('variants');assert.ok(!result.isError,JSON.stringify(result));const previews=JSON.parse(result.content[0].text).result;
+  assert.deepEqual(previews.map(p=>p.status),['edit_available','disabled','requires_resolve','requires_command','requires_command','unsupported_edit']);
+  const audit=JSON.parse(await readFile(path.join(root,'preview-audit.json'),'utf8'));assert.deepEqual(audit.forbidden,[]);assert.equal(audit.applyEditResult.applied,false);
+  assert.deepEqual(audit.context.only,['quickfix']);assert.equal(audit.context.diagnostics[0].code,'unresolved-reference');
+  await assert.rejects(readFile(path.join(root,'new.py')),{code:'ENOENT'});
+  assert.deepEqual(JSON.parse((await call('empty')).content[0].text).result,[]);
+  for(const mode of ['unsupported','not-quickfix','error','invalid','incomplete']){const r=await call(mode);assert.equal(r.isError,true,mode);assert.match(r.content[0].text,/codeAction|Diagnostics incomplete/);}
+  const incomplete=JSON.parse(await readFile(path.join(root,'preview-audit.json'),'utf8'));assert.ok(!incomplete.methods.includes('textDocument/codeAction'));
+  assert.equal(await readFile(path.join(root,'main.py'),'utf8'),original);
 });
