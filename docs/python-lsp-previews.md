@@ -53,6 +53,10 @@ command arguments/resolve data가 바뀌면 선택 근거가 달라진다. opaqu
 ## 파일 미리보기 정책과 한계
 
 허용된 원문은 lexical/realpath 모두 workspace 안인 .py/.pyi의 일반 파일이다.
+일반 파일 읽기는 nonblocking으로 열고 fd의 타입/크기/읽기 상한을 확인한다. FIFO는 writer 없이도 거부한다.
+원본의 유효한 첫째/둘째 줄 Python 인코딩 선언과 BOM도 UTF-8 전용 정책을 통과해야 한다.
+지원 밖 선언은 unsupported_encoding이며 원문/hash를 제공하지 않는다. 합성 결과의 지원 밖 선언은
+unsupported_result_encoding으로 표시하며 엔진도 독립적으로 재검사한다. 보호 이름의 대소문자 변형도 동일하게 거부한다.
 같은 workspace의 다른 프로젝트 파일은 읽기 가능한 snapshot과 outside project 표시를 함께 제공한다.
 workspace 밖/탈출 symlink, .git/.codex/.agents/.aws/.env 계열, 비 Python/누락/읽기 불가 파일과
 선택 environment의 다른 파일은 원문/hash를 제공하지 않는다. 명시한 입력 anchor는 기존 입력 정책을 따른다.

@@ -1,7 +1,8 @@
-import { realpath, stat, readFile, access } from 'node:fs/promises';
+import { realpath, stat, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { readRegularBytes, protectedPath, pythonText } from './source.mjs';
 
 export const supported = /\.pyi?$/;
 export function inside(root, file) {
@@ -12,9 +13,7 @@ async function exists(file) {
   try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 async function boundedText(file, limit = 1024 * 1024) {
-  if ((await stat(file)).size > limit) throw new Error(`File exceeds ${limit} bytes: ${file}`);
-  const bytes = await readFile(file);
-  if (bytes.length > limit) throw new Error(`File exceeds ${limit} bytes: ${file}`);
+  const { bytes } = await readRegularBytes(await realpath(file), limit);
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { throw new Error(`Expected a UTF-8 file: ${file}`); }
 }
@@ -101,7 +100,9 @@ export async function resolveProject(input, workspace, { env = process.env } = {
   const file = await realpath(lexical);
   if (!inside(boundary, file)) throw new Error(`File symlink is outside workspace_root: ${input}`);
   if (!supported.test(file) || !(await stat(file)).isFile()) throw new Error('Expected a .py or .pyi source file');
-  if (/^# \/\/\/ script\s*$/m.test(await boundedText(file))) throw new Error('PEP 723 standalone-script environments are not supported in this MVP; use a regular project config and explicit venv');
+  if (protectedPath(boundary, lexical) || protectedPath(boundary, file)) throw new Error('Protected Python source path is unsupported');
+  const source = pythonText((await readRegularBytes(file)).bytes);
+  if (/^# \/\/\/ script\s*$/m.test(source)) throw new Error('PEP 723 standalone-script environments are not supported in this MVP; use a regular project config and explicit venv');
   let root = boundary, config = null, metadata = {}, generic = null;
   for (let dir = path.dirname(file); inside(boundary, dir); dir = path.dirname(dir)) {
     for (const name of ['ty.toml', 'pyproject.toml']) {

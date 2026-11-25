@@ -11,11 +11,11 @@ Codex에서 사용할 수 있는 로컬 플러그인 모음입니다.
 
 TypeScript LSP 0.2.0은 조회·미리보기 도구 9개와 별도 적용 도구 2개를 제공합니다.
 파일을 변경하려면 미리보기에서 후보를 고른 뒤 적용을 명시적으로 요청하세요.
-Python LSP **0.2.0 릴리스 후보**는 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
+Python LSP **0.2.0**은 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
 파일을 바꾸려면 미리보기에서 변경을 확인하고 해당 선택 ID로 적용을 명시적으로 요청하세요.
 기존 0.1.1 설치본의 3개 도구에 자동 반영된 것은 아닙니다. 별도로 준비한 ty 0.0.109의
 절대 실행 경로를 환경 변수 또는 사용자 JSON에 지정하고 프로젝트 Python venv를 준비하세요.
-이 후보는 로컬 작업 브랜치 기준이며, 원격 main이나 기존 설치본이 갱신됐다는 뜻이 아닙니다.
+GitHub main에서 발견되는 버전과 현재 프로필의 설치 캐시는 별개입니다. 기존 preview 설치의 버전·활성화·훅 검토 상태를 따로 확인하세요.
 
 ## 필수 조건
 
@@ -31,13 +31,11 @@ TypeScript LSP 플러그인에는 다음이 필요합니다.
 
 ## 설치
 
-이 저장소의 로컬 체크아웃을 마켓플레이스 소스로 등록합니다.
-저장소 루트에서 실행하세요.
-이미 같은 이름의 Git 마켓에서 main을 추적 중이면 후보 설치를 위해 그 소스를 덮어쓰지 말고,
-별도 테스트 프로필이나 독립 preview 마켓을 사용하세요.
+GitHub main을 마켓플레이스 소스로 등록합니다. 이미 `copyx-codex-plugins`가 같은 Git main을 추적하면 등록 단계는 생략하세요.
+기존의 별도 preview 마켓/설치가 자동 교체되지는 않습니다. 로컬 체크아웃으로 개발 검증할 때는 별도 테스트 프로필에서 등록하세요.
 
 ```sh
-codex plugin marketplace add "$PWD" --json
+codex plugin marketplace add copyx/codex-plugins --ref main --json
 codex plugin list --available --marketplace copyx-codex-plugins --json
 codex plugin add typescript-lsp@copyx-codex-plugins --json
 # Python을 사용할 때 선택합니다. 실행 전 환경 설정은 Python 사용자 안내를 따르세요.

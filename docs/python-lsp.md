@@ -1,12 +1,24 @@
 # Python LSP 설계와 검증 기록
 
-현재 로컬 릴리스 후보는 0.2.0이며 읽기 9개·쓰기 2개를 제공한다.
-최신 통합/패키징 결과와 배포 전 경계는 [0.2.0 후보 마감](python-lsp-release-0.2.0.md)에 있다.
+Python 0.2.0은 읽기 9개·쓰기 2개를 제공한다.
+초기 통합/패키징 결과는 [0.2.0 후보 마감](python-lsp-release-0.2.0.md), main 병합 전 안전성 보완은 아래 #83 기록에 있다.
 아래는 단계별 당시 검증 기록으로, 기존 사용자 설치본의 기능/신뢰 갱신을 뜻하지 않는다.
 
 Orca #78 마감에서는 Python 105개·TS 49개·전체 154개, 정적 70파일을 통과했다.
 명시 env와 정상 신뢰 임시 profile의 JSON 방식에서 각각 Python 11개·TS 11개와 혼합 오류/수정 컨텍스트를 확인했다.
 버전/공개 메타데이터·실제 cache 지문과 미확인 범위는 위 최신 마감 기록을 따른다.
+
+## main 병합 전 독립 리뷰 보완 — Orca #83
+
+#82가 검토한 b8c7b4b..fd660c5에서 source encoding·보호 경로 대소문자·FIFO 세 사례를 직접 재현했다.
+실제 ty의 ASCII/Latin-1 선언 rename 후 CPython 바이트 compile 실패와 UTF-8/BOM 대조군을 확인했다.
+제품에는 Python 실행 의존성을 추가하지 않고 원본/합성 결과의 UTF-8 coding cookie/BOM 정책을 공유했다.
+첫째/둘째 줄 규칙, 다중 파일 사전 거부와 원문 보존을 회귀로 확인한다.
+동일 inode로 해석되는 보호 이름 변형은 원문 비노출/무쓰기, 설정 및 preview FIFO는 writer 없는 bounded subprocess로 검사한다.
+수정 전 신규 9개 중 7개 실패와 UTF-8/BOM 대조군 2개 통과를 확인했다.
+추가로 주석 안 Unicode line separator 뒤의 coding cookie도 물리적 줄 규칙으로 검사하도록 실패→수정했다.
+CPython 검사는 격리된 기존 테스트 도구의 바이트 compile만 사용하며 fixture 코드를 실행하지 않았다.
+코드/정책 근거와 알려진 경합 한계는 [적용 계약](python-lsp-apply.md#main-병합-전-안전성-보완--orca-83)에 있다.
 
 ## 초기 0.1.0 구현 — Orca #61·#62·#63
 

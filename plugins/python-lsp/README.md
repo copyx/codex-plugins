@@ -1,9 +1,9 @@
-# Python LSP 0.2.0 릴리스 후보
+# Python LSP 0.2.0
 
 Python 파일의 **정의·타입 정의·구현·참조·호버·문서 심볼·프로젝트 심볼**을 조회하고 Codex `apply_patch` 편집 뒤 변경 파일의
-타입 진단을 전달합니다. 0.2.0 후보는 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
+타입 진단을 전달합니다. 0.2.0은 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
 TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단이 따로 전달됩니다.
-기존 0.1.1의 3개 도구 설치본에는 자동 반영되지 않습니다. 이 안내는 로컬 0.2.0 후보를 대상으로 하며 원격 main이나 기존 preview 설치가 갱신됐다는 뜻이 아닙니다.
+GitHub main의 0.2.0과 현재 프로필의 설치 캐시는 별개입니다. 기존 0.1.1의 3개 도구 preview 설치가 자동 교체되는 것은 아니므로 설치 버전과 도구 목록을 확인하세요.
 
 ## LSP 기능
 
@@ -28,6 +28,10 @@ TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단�
 - Node.js 22 이상, 별도로 준비한 **Astral ty 0.0.109** 실행 파일.
 - 분석 프로젝트의 Python venv. 루트의 `.venv` 또는 명시한 venv 경로를 사용합니다.
 - UTF-8 `.py` / `.pyi` 파일. 입력 위치는 1부터 시작하는 UTF-16 줄·문자 좌표입니다.
+
+Python 인코딩 선언도 유효한 UTF-8이어야 합니다. 본문이 ASCII뿐이어도 `coding: ascii`/`latin-1` 등 다른 선언은
+지원하지 않고 원본을 보존합니다. BOM과 선언의 충돌, 편집 결과가 지원 밖 선언을 만드는 경우도 거부합니다.
+보호 경로 이름은 대소문자 변형도 거부하며 FIFO 등 일반 파일이 아닌 설정/대상은 읽지 않습니다.
 
 ty 실행 환경과 분석 프로젝트의 환경은 별개입니다. 예를 들어 서버 전용 venv에
 `ty==0.0.109`를 준비하고 그 실행 파일의 절대 경로를 지정하세요. GUI에서 사용할 때는
@@ -57,12 +61,11 @@ export PYTHON_LSP_PYTHON=/absolute/path/to/project-venv
 
 ## 설치
 
-0.2.0 후보가 있는 로컬 체크아웃의 저장소 루트에서 마켓을 등록한 뒤 Python 플러그인을 선택합니다.
-명령은 현재 Codex 프로필의 마켓/설치를 바꿉니다. 이미 같은 이름의 Git 마켓에서 main을 추적 중이면
-후보 설치를 위해 그 소스를 덮어쓰지 말고 별도 테스트 프로필이나 독립 preview 마켓을 사용하세요.
+GitHub main 마켓에서 Python 플러그인을 선택합니다. 명령은 현재 Codex 프로필의 마켓/설치를 바꿉니다.
+이미 같은 이름의 Git 마켓이 main을 추적하면 등록 단계는 생략하세요. 기존 별도 preview 설치는 자동으로 갱신되지 않습니다.
 
 ```sh
-codex plugin marketplace add "$PWD" --json
+codex plugin marketplace add copyx/codex-plugins --ref main --json
 codex plugin list --available --marketplace copyx-codex-plugins --json
 codex plugin add python-lsp@copyx-codex-plugins --json
 ```

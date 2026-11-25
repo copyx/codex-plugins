@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inside, supported, resolveProject } from './project.mjs';
+import { readRegularBytes, protectedPath, pythonText } from './source.mjs';
 
 const MAX_TEXT = 1024 * 1024;
 const MAX_ACTIONS = 20, MAX_TARGETS = 20, MAX_EDITS = 200;
@@ -48,17 +48,8 @@ export function selectDiagnostics(text, range, diagnostics) {
   });
 }
 async function readSnapshot(file, limit = MAX_TEXT) {
-  let handle;
-  try {
-    handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const before = await handle.stat();
-    if (!before.isFile()) throw new Error('Snapshot target is not a regular file');
-    if (before.size > limit) throw new Error(`Snapshot exceeds ${limit} bytes`);
-    const bytes = await handle.readFile();
-    const after = await stat(file);
-    if (bytes.length > limit || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.mode !== after.mode) throw new Error('File changed while snapshotting');
-    return { bytes, metadata: { sha256: hash(bytes), byte_length: bytes.length, mode: before.mode & 0o777, device: before.dev, inode: before.ino } };
-  } finally { await handle?.close(); }
+  const { bytes, stat } = await readRegularBytes(file, limit);
+  return { bytes, metadata: { sha256: hash(bytes), byte_length: bytes.length, mode: stat.mode & 0o777, device: stat.dev, inode: stat.ino } };
 }
 async function fileIdentity(file, { optional = false, workspace = null, limit = MAX_TEXT } = {}) {
   try {
@@ -82,10 +73,6 @@ async function canonicalTarget(file) {
     }
   }
 }
-function protectedPath(workspace, file) {
-  const parts = path.relative(workspace, file).split(path.sep);
-  return parts.some(p => ['.git', '.codex', '.agents', '.aws'].includes(p) || /^\.env(?:\.|$)/.test(p));
-}
 async function targetInfo(uri, basis) {
   const result = { uri, file: null, workspace_boundary: 'unknown', project_boundary: 'unknown', exists: null, sha256: null, read_status: 'unsupported_uri' };
   let lexical;
@@ -105,8 +92,8 @@ async function targetInfo(uri, basis) {
     const { bytes, metadata } = await readSnapshot(result.file);
     if (await realpath(lexical) !== result.file) throw new Error('Target symlink changed while snapshotting');
     let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch { return { ...result, exists: true, read_status: 'invalid_utf8' }; }
+    try { text = pythonText(bytes); }
+    catch (error) { return { ...result, exists: true, read_status: error.code === 'INVALID_UTF8' ? 'invalid_utf8' : 'unsupported_encoding', source_error: error.message }; }
     return { ...result, exists: true, ...metadata, bom: bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), read_status: 'read', text };
   } catch (error) {
     if (/changed while/.test(error.message)) throw error;
@@ -121,7 +108,7 @@ export async function captureBasis(project, session, tool, request, anchorText, 
     identity_scope: 'venv_metadata_and_interpreter_not_all_packages',
   };
   const anchor = await targetInfo(pathToFileURL(project.file).href, { scope, environment });
-  if (anchor.read_status !== 'read' || anchor.text !== anchorText) throw new Error('Preview anchor changed or is unavailable');
+  if (anchor.read_status !== 'read' || anchor.text !== anchorText) throw new Error(`Preview anchor changed or is unavailable (${anchor.read_status}${anchor.source_error ? ': ' + anchor.source_error : ''})`);
   const metadata = []; let count = 0;
   for (let dir = path.dirname(project.file); inside(project.workspace, dir); dir = path.dirname(dir)) {
     if (++count > 64) throw new Error('Preview metadata directory limit exceeded');
@@ -174,7 +161,7 @@ export async function buildPreview(basis, action) {
     return target;
   };
   const textEdits = async (uri, edits, document_version, source) => {
-    const { text, ...target } = await inspect(uri), normalized = [];
+    const { text, ...target } = await inspect(uri), normalized = [], replacements = []; let valid = true;
     if (!Array.isArray(edits)) { issues.add('unsupported_text_edits'); edits = []; }
     if (document_version !== null && (!Number.isSafeInteger(document_version) || document_version < 0 || target.file !== basis.scope.anchor_file || document_version !== basis.document_version)) issues.add('unverified_document_version');
     if (target.read_status !== 'read') issues.add('target_snapshot_unavailable');
@@ -186,16 +173,23 @@ export async function buildPreview(basis, action) {
         if (!rangeShape(edit?.range) || typeof edit.newText !== 'string') throw new Error('Invalid edit');
         if (text !== undefined) {
           const start = offsetAt(text, edit.range.start), end = offsetAt(text, edit.range.end);
+          replacements.push({ start, end, newText: edit.newText });
           old_text = text.slice(start, end);
           if (!spans.has(target.file)) spans.set(target.file, []);
           const previous = spans.get(target.file);
           if (previous.some(p => start === end ? (p.start === p.end ? start === p.start : p.start <= start && start < p.end) : p.start === p.end ? start <= p.start && p.start < end : p.start < end && start < p.end)) issues.add('overlapping_text_edits');
           previous.push({ start, end });
         }
-      } catch { issues.add('invalid_text_edit'); }
+      } catch { issues.add('invalid_text_edit'); valid = false; }
       textBytes += Buffer.byteLength(typeof edit?.newText === 'string' ? edit.newText : '') + Buffer.byteLength(old_text ?? '');
       if (textBytes > MAX_TEXT) throw new Error('Preview text limit exceeded (1 MiB); narrow the range');
       normalized.push({ range: edit?.range ?? null, new_text: edit?.newText ?? null, old_text, ...(edit?.annotationId === undefined ? {} : { annotation_id: edit.annotationId }) });
+    }
+    if (text !== undefined && valid && !issues.has('overlapping_text_edits')) {
+      let output = text;
+      for (const edit of replacements.sort((a, b) => b.start - a.start || b.end - a.end)) output = output.slice(0, edit.start) + edit.newText + output.slice(edit.end);
+      try { pythonText(Buffer.from((target.bom ? '\uFEFF' : '') + output, 'utf8')); }
+      catch { issues.add('unsupported_result_encoding'); }
     }
     files.push({ ...target, document_version, source, edits: normalized });
   };

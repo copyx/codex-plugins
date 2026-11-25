@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { inside, supported, resolveProject } from './project.mjs';
 import { assertBasisCurrent, fingerprint, offsetAt } from './preview.mjs';
+import { protectedPath, pythonText } from './source.mjs';
 
 const MAX_TEXT = 1024 * 1024;
 const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
@@ -14,9 +15,6 @@ const stamp = s => ({ ...identity(s), size: s.size, mode: s.mode, uid: s.uid, gi
 const replacementStamp = s => { const { ctime, ...rest } = stamp(s); return rest; };
 const same = (a, b) => fingerprint(a) === fingerprint(b);
 function requireValue(value, message) { if (!value) throw new Error(message); }
-function protectedPath(workspace, file) {
-  return path.relative(workspace, file).split(path.sep).some(p => ['.git', '.codex', '.agents', '.aws'].includes(p) || /^\.env(?:\.|$)/.test(p));
-}
 async function parentCheck(io, file, expected) {
   const parent = path.dirname(file);
   requireValue(await io.realpath(parent) === parent, 'Symlink parent is unsupported');
@@ -60,7 +58,7 @@ function metadata(snapshot) {
     bom: snapshot.bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) };
 }
 function compose(bytes, edits) {
-  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const text = pythonText(bytes);
   const spans = edits.map(edit => {
     requireValue(typeof edit.new_text === 'string' && Buffer.from(edit.new_text, 'utf8').toString('utf8') === edit.new_text, 'Invalid Unicode replacement text');
     requireValue(edit.annotation_id === undefined, 'Annotated edits are unsupported');
@@ -74,6 +72,7 @@ function compose(bytes, edits) {
   const bom = bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]));
   const result = Buffer.from((bom ? '\uFEFF' : '') + output, 'utf8');
   requireValue(result.length <= MAX_TEXT, 'Result exceeds 1 MiB');
+  pythonText(result);
   return result;
 }
 

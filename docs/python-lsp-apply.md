@@ -97,7 +97,10 @@ documentChanges 성공, capability/prepare 변경·오류/잘못된 응답·외�
 - SHA-256·원본 바이트 길이/일반 mode·device/inode·BOM과 현재 snapshot을 비교한다.
   preview target metadata와 edit.files도 같아야 한다. 현재 열린 버전이 필요한 편집은 session의 버전과 같아야 한다.
   buildPreview가 unverified로 표시하는 non-anchor document version은 적용 가능 후보가 아니다.
-- UTF-8을 엄격히 decode하고 LSP의 BOM 없는 UTF-16 좌표를 사용한다. BOM은 원래 바이트에 있을 때 보존한다.
+- 원본과 합성 결과 모두 UTF-8을 엄격히 decode하고 유효한 Python source coding cookie/BOM인지 검사한다.
+  첫 줄 cookie가 우선이며 둘째 줄은 첫 줄이 공백/주석일 때만 유효하다. 비활성 이후 선언은 무시한다.
+  ASCII/Latin-1/unknown 등 지원 밖 선언과 BOM 충돌은 본문이 ASCII여도 거부하고 자동 변환하지 않는다.
+  LSP의 BOM 없는 UTF-16 좌표를 사용하며 BOM은 원래 바이트에 있을 때 보존한다.
   원문 old_text, 유효한 좌표·순서/surrogate 경계를 확인하고 중복·겹침·같은 시작의 모호한 편집을 거부한다.
   인접 범위는 허용한다. 적용 범위 밖의 CRLF는 보존하고 서버 new_text의 줄바꿈을 임의로 변환하지 않는다.
   잘못된 Unicode replacement를 자동 대체 문자로 바꾸지 않고 거부한다.
@@ -134,7 +137,25 @@ artifact도 inode/hash/mode/소유자·시간·link 수와 부모 identity를 �
 retained_artifacts는 자동 삭제하지 못했거나 보존한 경로다. 경로만 있다는 사실이 현재 유효성을 보장하지 않으므로
 backup_verified=false 또는 부모 교체 사례에서는 별도 확인해야 한다. 삭제/수동 복구를 자동 실행하지 않는다.
 
-## 검증 범위와 제한
+## main 병합 전 안전성 보완 — Orca #83
+
+lib/source.mjs의 readRegularBytes/protectedPath/pythonText를 project/preview/apply가 공유한다.
+설정·preview 대상 읽기는 nonblocking/no-follow open 뒤 fd의 일반 파일 여부와 상한을 확인한다.
+소스 인코딩은 원본 preview/프로젝트 선택과 엔진 원본/합성 결과에 같은 UTF-8 전용 정책을 적용한다.
+미리보기는 합성 결과의 지원 밖 인코딩도 unsupported_result_encoding으로 표시한다.
+보호 경로 요소는 모든 볼륨에서 보수적으로 소문자 비교해 혼합 대소문자 alias의 원문 노출과 쓰기를 막는다.
+대소문자 구분 볼륨에서도 해당 예약 이름 변형을 거부하는 정책이다.
+
+[PEP 263](https://peps.python.org/pep-0263/)의 유효 선언 위치와
+[CPython 3.15.2 tokenize](https://github.com/python/cpython/blob/v3.15.2/Lib/tokenize.py)의 UTF-8 이름/BOM 규칙을 참고했다.
+Python 3의 무선언 기본값은 UTF-8이며, BOM 없는 utf8과 utf-8/utf_8 계열을 지원한다.
+제품에서 Python을 실행하거나 다른 코덱으로 변환하지 않는다. 테스트 도구의 바이트 compile은 소스를 실행하지 않는다.
+
+수정 전 실제 ty rename이 ASCII/Latin-1 선언 소스를 손상시키던 사례와 writer 없는 config/target FIFO 대기,
+case-insensitive fixture의 보호 경로 원문 노출을 재현했다. 수정 후 무쓰기·원문 비노출과 UTF-8/BOM 대조군,
+첫째/둘째 줄 규칙·다중 파일 사전 거부를 확인한다. 최신 전체 수치는 [검증 기록](python-lsp.md)에 둔다.
+
+## 기존 엔진 검증과 제한
 
 실제 ty 0.0.109의 rename을 새 세션으로 재조회하여 ID 일치를 확인한 다음, 두 파일의 선언/import/참조를 적용했다.
 무관한 동명 class는 그대로였고 중복 적용은 오래된 preimage로 거부됐다.
