@@ -13,5 +13,6 @@ Python 사용자는 [Python LSP 사용자 안내](../plugins/python-lsp/README.m
 | [Python 브랜치 설치 기록](python-lsp-installation.md) | 커밋·원격 SHA, main/TS 보존, Git 고정 번들 preview 설치, ty 실행 환경과 훅 검토 상태 |
 | [Python 사용자 런타임 설정](python-lsp-runtime-settings.md) | 0.1.1의 GUI 환경 누락 수정, 사용자 JSON·명시 환경 우선순위, MCP/훅 공통 경로 |
 | [Python 미리보기 계약](python-lsp-previews.md) | 빠른 수정·이름 변경·prepare/식별자 정책·선택 ID/basis·미실행 상태와 한계 |
+| [Python 내부 적용 엔진](python-lsp-apply.md) | #75 기존 파일 쓰기 정책·파일별 교체·복구 증거·후속 도구의 재조회 책임 |
 | [검증 자동화 사용법](verify-usage.md) | 유지보수용 검증 명령, 입력 경로, 격리·사용자 설치 검사의 경계 |
 | [검증 기록](verification.md) | 실행 환경, 검사 결과, 당시 제약과 후속 확인 결과 |

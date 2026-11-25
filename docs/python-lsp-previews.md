@@ -78,7 +78,8 @@ captureBasis의 request는 호출자가 canonical workspace/file과 정규화 �
 buildPreview는 basis.tool과 request를 ID에 묶고 서버 action/edit에서 snapshot과 상태를 만든다.
 호출자는 build 후 basis와 후보의 targets를 assertBasisCurrent로 재검증해야 한다.
 이름 변경은 별도 lib/rename.mjs가 아래 정책으로 이 표면을 사용한다.
-적용 API·명령 정책·resolve 이후 새 편집 수용은 #75 이후의 별도 책임이다.
+기존 파일 텍스트 적용은 [#75 내부 엔진](python-lsp-apply.md)에 분리했다.
+사용자 쓰기 MCP·후속 진단·명령 정책·resolve 이후 새 편집 수용은 후속 항목의 별도 책임이다.
 
 ## 이름 변경 — Orca #74
 
