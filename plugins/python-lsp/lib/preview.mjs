@@ -113,7 +113,7 @@ async function targetInfo(uri, basis) {
     return { ...result, exists: error.code === 'ENOENT' ? false : null, read_status: error.code === 'ENOENT' ? 'missing' : 'unreadable' };
   }
 }
-export async function captureBasis(project, session, tool, request, anchorText, diagnostics = []) {
+export async function captureBasis(project, session, tool, request, anchorText, diagnostics = [], operationContext = null) {
   const scope = { workspace_root: project.workspace, project_root: project.root, config: project.config, anchor_file: project.file };
   const environment = { ...project.environment,
     interpreter: await fileIdentity(project.environment.interpreter, { limit: 128 * MAX_TEXT }),
@@ -132,6 +132,7 @@ export async function captureBasis(project, session, tool, request, anchorText, 
   const { text, ...anchorMetadata } = anchor;
   return {
     schema_version: 1, tool, request: clone(request), scope, anchor: anchorMetadata, anchor_sha256: anchor.sha256,
+    ...(operationContext === null ? {} : { operation_context: clone(operationContext) }),
     document_version: session.documents.get(pathToFileURL(project.file).href)?.version ?? null,
     project_metadata: metadata, configuration_file: project.configurationFile ? await fileIdentity(project.configurationFile) : null,
     environment,
@@ -146,7 +147,7 @@ export async function assertBasisCurrent(basis, session) {
   const project = await resolveProject(basis.request.file, basis.request.workspace_root);
   const uri = pathToFileURL(project.file).href, document = session.documents.get(uri);
   if (!document) throw new Error('Preview anchor session changed');
-  const current = await captureBasis(project, session, basis.tool, basis.request, document.text, basis.diagnostics);
+  const current = await captureBasis(project, session, basis.tool, basis.request, document.text, basis.diagnostics, basis.operation_context ?? null);
   const { targets, ...original } = basis;
   if (fingerprint(current) !== fingerprint(original)) throw new Error('Preview basis changed during request');
   for (const target of targets ?? []) {

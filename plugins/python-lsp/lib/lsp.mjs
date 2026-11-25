@@ -44,7 +44,7 @@ export class LspSession {
       capabilities: { general: { positionEncodings: ['utf-16'] }, workspace: { configuration: true, workspaceFolders: true },
         textDocument: { synchronization: { didSave: false }, publishDiagnostics: { relatedInformation: true, versionSupport: true },
           definition: { linkSupport: true }, typeDefinition: { linkSupport: true }, implementation: { linkSupport: true }, hover: { contentFormat: ['markdown', 'plaintext'] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-          codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix'] } }, disabledSupport: true } } },
+          codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix'] } }, disabledSupport: true }, rename: { prepareSupport: true, prepareSupportDefaultBehavior: 1 } } },
       initializationOptions: { untrustedWorkspace: true, experimental: { useUv: 'off' }, settings: this.settings },
     });
     this.capabilities = initialized.capabilities ?? {};

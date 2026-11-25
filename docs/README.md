@@ -12,6 +12,6 @@ Python 사용자는 [Python LSP 사용자 안내](../plugins/python-lsp/README.m
 | [Python LSP 설계와 검증](python-lsp.md) | 독립 번들·ty/환경 계약, 심볼·타입 정의·구현 탐색, 타입 진단·TS 공존 검증 |
 | [Python 브랜치 설치 기록](python-lsp-installation.md) | 커밋·원격 SHA, main/TS 보존, Git 고정 번들 preview 설치, ty 실행 환경과 훅 검토 상태 |
 | [Python 사용자 런타임 설정](python-lsp-runtime-settings.md) | 0.1.1의 GUI 환경 누락 수정, 사용자 JSON·명시 환경 우선순위, MCP/훅 공통 경로 |
-| [Python 미리보기 계약](python-lsp-previews.md) | 빠른 수정 범위·새 진단·선택 ID/basis·파일/환경 식별·미실행 상태와 한계 |
+| [Python 미리보기 계약](python-lsp-previews.md) | 빠른 수정·이름 변경·prepare/식별자 정책·선택 ID/basis·미실행 상태와 한계 |
 | [검증 자동화 사용법](verify-usage.md) | 유지보수용 검증 명령, 입력 경로, 격리·사용자 설치 검사의 경계 |
 | [검증 기록](verification.md) | 실행 환경, 검사 결과, 당시 제약과 후속 확인 결과 |

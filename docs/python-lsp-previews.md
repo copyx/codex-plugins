@@ -1,4 +1,4 @@
-# Python 빠른 수정 미리보기 계약 — Orca #73
+# Python 미리보기 계약 — Orca #73·#74
 
 `code_actions_preview(workspace_root,file,range)`는 읽기 전용이다.
 기존 입력 파일·project/venv/runtime 선택을 재사용하고 새 publishDiagnostics를 받은 뒤
@@ -69,15 +69,57 @@ runtime JSON 16 KiB, project metadata 디렉터리 64개 한도를 사용한다.
 경쟁적인 디렉터리 교체의 완전한 방어/다중 파일 원자 적용, ACL/xattr 보존은 이 읽기 전용 단계의 증거가 아니다.
 후속 적용은 원래 요청의 새 서버 재조회와 대상·선택 재검증/쓰기 정책을 별도로 통과해야 한다.
 
-## #74 재사용 표면
+## 공통 재사용 표면
 
 독립 `lib/preview.mjs`의 fingerprint, offsetAt/toLspRange, captureBasis, assertBasisCurrent,
 buildPreview를 재사용할 수 있다. 코드 액션 경로는 codeActionsPreview가 새 진단과 실제 요청을 연결한다.
 captureBasis의 request는 호출자가 canonical workspace/file과 정규화 좌표로 구성한다.
+선택적인 마지막 operationContext 인자는 내부에서 확인한 operation 증거를 snapshot에 포함한다.
 buildPreview는 basis.tool과 request를 ID에 묶고 서버 action/edit에서 snapshot과 상태를 만든다.
 호출자는 build 후 basis와 후보의 targets를 assertBasisCurrent로 재검증해야 한다.
-rename 자체의 prepare/이름 검증/요청·응답은 아직 구현하지 않았다.
+이름 변경은 별도 lib/rename.mjs가 아래 정책으로 이 표면을 사용한다.
 적용 API·명령 정책·resolve 이후 새 편집 수용은 #75 이후의 별도 책임이다.
+
+## 이름 변경 — Orca #74
+
+`rename_preview(workspace_root,file,line,character,new_name)`는 위치 기반 읽기 전용 도구다.
+renameProvider가 없으면 오류이고 prepareProvider가 있으면 prepareRename을 먼저 호출한다.
+Range, range/placeholder, defaultBehavior 형식을 검증해 실제 결과를 사용한다.
+defaultBehavior=true는 확인한 source identifier 범위를 계산하고, false는 원래 위치를 유지해 rename을 요청한다.
+prepare가 광고되지 않으면 해당 메서드를 호출하지 않는다. server error는 phase와 LSP 메시지를 전파한다.
+prepare null은 not_renamable, rename null/빈 WorkspaceEdit/실효 변경 없음은 no_changes다.
+그 외는 preview_available과 generic preview 상태를 함께 표시한다.
+잘못된 WorkspaceEdit나 command 같은 비표준 최상위 필드는 실패이며 실행 경로가 아니다.
+
+공통 captureBasis의 선택적 operation_context에 rename capability, 이름 정책, rename 모듈 fingerprint와
+확인한 prepare 결과/범위/old_name을 넣는다. 원래 canonical 요청에는 위치와 new_name이 포함된다.
+assertBasisCurrent는 같은 context와 FS snapshot을 재검증하고 후속 새 조회는 prepare/rename도 다시 수행해야 한다.
+빠른 수정에는 이 선택 context 필드를 추가하지 않는다. 공유 모듈 코드 hash 변경 때문에 업데이트 전 ID와는 달라질 수 있다.
+
+### Python 이름 정책과 검증 범위
+
+Node 내장 XID_Start/XID_Continue와 이미 NFKC인 입력만 허용하며 1~256 코드포인트 상한을 둔다.
+이 상한은 Python 언어 자체의 길이 제한이 아니라 미리보기 입력 정책이다.
+Python 3.15 hard keyword 및 soft keyword(match/case/type/lazy/_)와 __debug__를 제외한다.
+default-ignorable 코드포인트도 제외한다. 문맥상 유효한 soft keyword/일부 Unicode 이름을 보수적으로 거부하는 부분집합이다.
+입력을 자동으로 정규화하거나 임의의 전역/프로젝트 Python을 실행해 검증하지 않는다.
+
+근거는 [Python 3.15 lexical names](https://docs.python.org/3.15/reference/lexical_analysis.html#names-identifiers-and-keywords),
+[LSP rename/prepareRename 계약](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/language/rename.md)이다.
+Node 24.14.1의 Unicode 17.0과 테스트 도구 Python 3.15.2의 Unicode 17.0.0에서
+ASCII/underscore·한글·precomposed Latin/Greek·Deseret 표본의 isidentifier/compile을 확인했다.
+keyword/softkwlist도 검사했다. 테스트 compiler는 명시 격리 도구의 -I -S로 문자열을 compile했으며 코드 실행은 하지 않았다.
+실제 제품 경로는 선택 프로젝트 interpreter를 실행하지 않는다.
+다른 Node/Python 버전이나 모든 Unicode 코드포인트·더 이른 Python의 신규 문자 호환성까지 검증한 것은 아니다.
+
+### 실제 결과와 별도 fixture
+
+실제 ty 0.0.109는 준비 범위와 changes 형식을 반환했다.
+두 파일 이상의 선언/import/참조가 제안됐고 무관한 같은 철자 class는 포함되지 않았다.
+반복 새 세션 ID, ASCII와 NFKC-stable 한글 이름, comment의 not_renamable·같은 이름의 no_changes,
+UTF-16/CRLF 및 원본 바이트 불변을 확인했다.
+documentChanges, 다른 prepare 형식/no-prepare, 외부/리소스·명령/오류/이상 응답은 통제된 stdio fixture 증거다.
+서버 applyEdit는 거부했고 command/resolve 호출과 실제 파일 rename/create도 없었다.
 
 실제 ty의 import/억제·반복 ID와 통제된 command/deferred/disabled/resource/failure 증거는
 [구현 검증 기록](python-lsp.md)에 구분한다. 사용자 설치/설정/신뢰와 제품 버전은 이번에 변경하지 않는다.

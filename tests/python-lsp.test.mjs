@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists eight read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists nine read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,7 +81,7 @@ test('Python actual MCP lists eight read-only tools; Unicode CRLF and .pyi calls
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview']);
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview', 'rename_preview']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
@@ -485,4 +485,40 @@ test('Python code_actions_preview normal MCP distinguishes unavailable/incomplet
   for(const mode of ['unsupported','not-quickfix','error','invalid','incomplete']){const r=await call(mode);assert.equal(r.isError,true,mode);assert.match(r.content[0].text,/codeAction|Diagnostics incomplete/);}
   const incomplete=JSON.parse(await readFile(path.join(root,'preview-audit.json'),'utf8'));assert.ok(!incomplete.methods.includes('textDocument/codeAction'));
   assert.equal(await readFile(path.join(root,'main.py'),'utf8'),original);
+});
+test('Python rename_preview shows scoped declaration/import/references and stable IDs without source changes',real,async t=>{
+  const root=await fixture(t),line='emoji = "😀"; item = Greeter()';
+  const sources={'src/model.py':'class Greeter:\n    pass\n','rename-use.py':'from model import Greeter\r\n'+line+'\r\n# no symbol\r\n','unrelated.py':'def local():\n    class Greeter:\n        pass\n    return Greeter()\n'};
+  for(const[file,text]of Object.entries(sources))await writeFile(path.join(root,file),text);await symlink('/etc/hosts',path.join(root,'escape.py'));
+  const args={workspace_root:root,file:'rename-use.py',line:2,character:line.indexOf('Greeter')+2,new_name:'RenamedGreeter'};
+  const requests=[{jsonrpc:'2.0',id:1,method:'tools/list'},message(2,'rename_preview',args),message(3,'rename_preview',{...args,file:path.join(root,'rename-use.py')}),message(4,'rename_preview',{...args,new_name:'새이름'}),message(5,'rename_preview',{...args,line:3,character:1}),message(6,'rename_preview',{...args,new_name:'Greeter'}),message(7,'rename_preview',{...args,new_name:'class'}),message(8,'rename_preview',{...args,new_name:'e\u0301'}),message(9,'rename_preview',{...args,file:'../outside.py'}),message(10,'rename_preview',{...args,file:'escape.py'})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const tool=responses[0].result.tools.find(t=>t.name==='rename_preview');assert.ok(tool,'rename_preview must be advertised');assert.deepEqual(tool.inputSchema.required,['workspace_root','file','line','character','new_name']);assert.equal(tool.annotations.readOnlyHint,true);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text);};
+  const first=value(2);assert.equal(first.status,'preview_available');assert.equal(first.result.status,'edit_available');assert.ok(first.result.edit.files.length>=2);
+  assert.ok(first.result.edit.files.some(f=>f.file.endsWith('/src/model.py')));assert.ok(first.result.edit.files.some(f=>f.file.endsWith('/rename-use.py')));assert.ok(!first.result.edit.files.some(f=>f.file.endsWith('/unrelated.py')));
+  assert.equal(first.result.selection_id,value(3).result.selection_id);assert.notEqual(first.result.selection_id,value(4).result.selection_id);
+  assert.ok(value(4).result.edit.files.some(f=>f.edits.some(e=>e.new_text==='새이름')));
+  assert.equal(value(5).status,'not_renamable');assert.equal(value(6).status,'no_changes');
+  for(const id of [7,8,9,10])assert.equal(responses.find(r=>r.id===id).result.isError,true);
+  t.diagnostic(`Actual ty rename prepare: ${first.prepare.status}; edit forms: ${[...new Set(first.result.edit.files.map(f=>f.source))].join(',')}`);
+  for(const[file,text]of Object.entries(sources))assert.equal(await readFile(path.join(root,file),'utf8'),text);
+});
+test('Python rename_preview normal MCP handles prepare variants, documentChanges and errors without applying anything',{timeout:30000},async t=>{
+  const root=await fixture(t),command=path.join(root,'fixture-rename.mjs'),source='old = 1\n';
+  await cp(new URL('./fixtures/python-rename-lsp.mjs',import.meta.url),command);await chmod(command,0o755);await writeFile(path.join(root,'rename-source.py'),source);
+  if(!pythonEnv){await mkdir(path.join(root,'.venv/bin'),{recursive:true});await writeFile(path.join(root,'.venv/pyvenv.cfg'),'version = 3.15.2');await symlink(process.execPath,path.join(root,'.venv/bin/python'));}
+  const request=JSON.stringify(message(1,'rename_preview',{workspace_root:root,file:'rename-source.py',line:1,character:2,new_name:'renamed'}))+'\n';
+  const call=async mode=>{await writeFile(path.join(root,'rename-mode'),mode);return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;};
+  for(const mode of ['document','range','default','false-default','no-prepare']){
+    const r=await call(mode);assert.ok(!r.isError,JSON.stringify(r));const data=JSON.parse(r.content[0].text);assert.equal(data.status,'preview_available');assert.equal(data.result.status,'edit_available');
+    const audit=JSON.parse(await readFile(path.join(root,'rename-audit.json'),'utf8'));assert.deepEqual(audit.forbidden,[]);assert.equal(audit.applyEditResult.applied,false);
+    if(mode==='no-prepare')assert.ok(!audit.methods.includes('textDocument/prepareRename'));
+  }
+  const none=await call('no-symbol');assert.ok(!none.isError);assert.equal(JSON.parse(none.content[0].text).status,'not_renamable');
+  assert.ok(!JSON.parse(await readFile(path.join(root,'rename-audit.json'),'utf8')).methods.includes('textDocument/rename'));
+  for(const mode of ['null-edit','empty-edit'])assert.equal(JSON.parse((await call(mode)).content[0].text).status,'no_changes');
+  for(const mode of ['unsupported','prepare-error','bad-prepare','error','invalid-result','command']){const r=await call(mode);assert.equal(r.isError,true,mode);assert.match(r.content[0].text,/rename|Rename|WorkspaceEdit/);}
+  for(const mode of ['external','resource']){const r=await call(mode);assert.ok(!r.isError);assert.equal(JSON.parse(r.content[0].text).result.status,'unsupported_edit');}
+  await assert.rejects(readFile(path.join(root,'renamed.py')),{code:'ENOENT'});assert.equal(await readFile(path.join(root,'rename-source.py'),'utf8'),source);
 });

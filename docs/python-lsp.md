@@ -106,6 +106,19 @@ fixture는 client가 command/resolve를 호출하지 않고 서버 applyEdit도 
 실제 격리 Codex에서 Python 8개·TS 11개와 import/억제 후보·반복 ID, 혼합 패치 2회·모델 요청 3회를 확인했다.
 독립 Python 캐시 11파일 일치, 정적 57파일과 `git diff --check`도 통과했다.
 
+## 후속 이름 바꾸기 미리보기 — Orca #74
+
+독립 lib/rename.mjs에서 이름 정책·광고된 prepareRename·WorkspaceEdit 구조를 확인하고,
+#73의 captureBasis/buildPreview/assertBasisCurrent를 선택 operation_context로 작게 확장해 재사용한다.
+새 이름/위치/capability/prepare 증거를 선택 근거에 묶고 기존 빠른 수정 동작도 함께 검증한다.
+실제 ty의 changes와 별도 protocol documentChanges·외부/리소스/오류 증거, Node Unicode/Python 정책 범위는
+[미리보기 계약](python-lsp-previews.md#이름-변경--orca-74)에 구분했다. 파일 적용과 사용자 설치·버전 마감은 포함하지 않는다.
+
+2026-11-25 검증: Python 57개·기존 TS 49개, 실패/건너뜀 0.
+실제 격리 Codex에서 Python 9개·TS 11개 목록/호출, 독립 Python 캐시 12파일 일치를 확인했다.
+혼합 패치 2회·모델 요청 3회와 언어별 새 오류/정상 결과, 정적 60파일·diff 검사도 통과했다.
+기본 격리 검증의 일회성 hook trust bypass는 임시 프로필에만 적용했다. 사용자 신뢰 검토의 증거가 아니다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.

@@ -1,9 +1,9 @@
 # Python LSP
 
 Python 파일의 **정의·타입 정의·구현·참조·호버·문서 심볼·프로젝트 심볼**을 조회하고 Codex `apply_patch` 편집 뒤 변경 파일의
-타입 진단을 전달합니다. 현재 작업 브랜치는 읽기 전용 도구 8개를 제공하며 소스를 수정하지 않습니다.
+타입 진단을 전달합니다. 현재 작업 브랜치는 읽기 전용 도구 9개를 제공하며 소스를 수정하지 않습니다.
 TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단이 따로 전달됩니다.
-문서·프로젝트 심볼과 타입 정의·구현·빠른 수정 미리보기는 후속 확장 중인 기능입니다. 기존 0.1.1 설치본에 자동 반영된 것은 아니므로 실제 도구 목록을 확인하세요.
+문서·프로젝트 심볼과 타입 정의·구현·빠른 수정/이름 변경 미리보기는 후속 확장 중인 기능입니다. 기존 0.1.1 설치본에 자동 반영된 것은 아니므로 실제 도구 목록을 확인하세요.
 
 ## LSP 기능
 
@@ -18,7 +18,8 @@ TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단�
 | 프로젝트 심볼 검색 (Workspace Symbol) | 작업 브랜치 제공 | `project_symbols(workspace_root,file,query)`로 기준 파일이 선택한 ty 프로젝트 세션에서 이름 검색; 선택한 프로젝트·설정·기준 파일 표시 |
 | 편집 후 타입 진단 (Diagnostics) | 조건부 제공 | 신뢰한 `apply_patch` 훅이 추가·수정·이동된 파일을 검사 |
 | 빠른 수정 미리보기 (Code Action) | 작업 브랜치 제공 | `code_actions_preview`로 새 진단 범위의 후보·파일 변경·선택 ID 확인; import 수정과 억제 후보 구분 |
-| 이름 변경 미리보기·실제 편집 적용 | 미제공 | 현재 도구에 포함되지 않음 |
+| 이름 변경 미리보기 (Rename) | 작업 브랜치 제공 | `rename_preview`로 선언·import·참조의 변경 파일/원문/선택 ID 조회; 원본 유지 |
+| 실제 편집 적용 | 미제공 | 현재 도구에 포함되지 않음 |
 
 ## 필수 조건
 
@@ -161,6 +162,20 @@ ty 0.0.109 fixture에서는 형제 설정 프로젝트가 별도로 검색됐고
 최대 후보 20개·후보당 URI 20개/편집 200개, 읽는 소스는 파일당 1 MiB이며 한도 초과는 실패로 표시합니다.
 선택 근거의 정확한 범위와 환경/의존성 제한은 [미리보기 계약](../../docs/python-lsp-previews.md)에 있습니다.
 
+> python-lsp로 src/main.py 12행 7열 Greeter를 RenamedGreeter로 바꾸는 미리보기를 보여줘.
+
+`rename_preview`는 `workspace_root`, `file`, 1-based UTF-16 `line`/`character`, `new_name`을 받습니다.
+ty가 prepareRename을 광고하면 준비 결과로 위치를 확인한 뒤 이름 변경 목록을 조회합니다.
+`preview_available`은 파일별 제안과 `selection_id`가 있다는 뜻이며 원본을 바꾸지 않습니다.
+준비 결과에 심볼이 없으면 `not_renamable`, 서버 편집 없음/실효 변경 없음은 `no_changes`입니다.
+미지원·서버 오류·잘못된 응답은 오류이고, 외부/리소스 등 이슈는 빠른 수정과 같은 preview 상태로 표시합니다.
+
+새 이름은 1~256 Unicode 코드포인트의 XID 식별자로, 입력이 이미 NFKC 형태여야 합니다.
+자동 정규화는 하지 않습니다. Python 3.15의 hard/soft keyword(예: match/case/type/lazy/_)와
+`__debug__`, default-ignorable 코드포인트는 보수적으로 제외합니다. 일부 유효한 Python 이름도 이 정책에서 거부됩니다.
+현재 Node Unicode 데이터 기준의 지원 부분집합이며, 모든 Python 버전/모든 Unicode 이름과의 동등성을 보장하지 않습니다.
+검증한 Node/Python 조합과 정책 근거는 [이름 변경 계약](../../docs/python-lsp-previews.md#이름-변경--orca-74)에 있습니다.
+
 신뢰한 훅은 `apply_patch`로 추가·수정·이동된 Python 파일만 검사합니다. 삭제 파일과
 다른 언어는 제외합니다. 새 정상 결과는 `no diagnostics published for this snapshot`,
 진단 미수신·설정/서버 실패는 `incomplete` 또는 `not checked`로 구분합니다.
@@ -174,7 +189,7 @@ ty 0.0.109 fixture에서는 형제 설정 프로젝트가 별도로 검색됐고
 - 환경 누락/충돌: 프로젝트 venv와 위 선택 순서를 확인하세요. Conda/Pixi나 여러 환경을 자동으로 고르지 않습니다.
 - 자동 진단 없음: 설치·활성화와 Python 훅의 신뢰를 확인하세요. `apply_patch` 이외의 편집에는 훅이 실행되지 않습니다.
 - timeout/incomplete: 정상 판정이 아닙니다. 설정·환경을 확인하고 작은 파일 범위로 다시 조회하세요.
-- PEP 723 독립 스크립트 환경, 노트북, lint/format, 장기 서버, 미리보기와 실제 편집 도구는 이번 버전에 없습니다.
+- PEP 723 독립 스크립트 환경, 노트북, lint/format, 장기 서버와 실제 편집 적용 도구는 제공하지 않습니다.
 
 macOS의 작은 격리 fixture로 검증했습니다. ty는 Beta이며 다른 버전·운영체제·대규모 저장소·
 실제 의존성별 타입 정확성을 보장하지 않습니다. 유지보수 검증은

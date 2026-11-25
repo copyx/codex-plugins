@@ -2,12 +2,13 @@ import { createInterface } from 'node:readline';
 import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 import { codeActionsPreview } from './lib/preview.mjs';
+import { renamePreview, validatePythonName } from './lib/rename.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction', rename_preview: 'textDocument/rename' };
 const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
 const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
 const pointSchema = { type: 'object', additionalProperties: false, properties: positionFields, required: ['line', 'character'] };
-const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } }, code_actions_preview: { range: { type: 'object', additionalProperties: false, properties: { start: pointSchema, end: pointSchema }, required: ['start', 'end'] } } };
+const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } }, code_actions_preview: { range: { type: 'object', additionalProperties: false, properties: { start: pointSchema, end: pointSchema }, required: ['start', 'end'] } }, rename_preview: { ...positionFields, new_name: { type: 'string', minLength: 1, maxLength: 256 } } };
 function toolResult(output) {
   const text = JSON.stringify(output);
   if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');
@@ -40,6 +41,8 @@ const tools = Object.keys(methods).map(name => ({
       ? 'Find implementation locations at a local .py/.pyi position using ty 0.0.109. Use an absolute workspace_root, a file inside it and 1-based UTF-16 line/character. Preserves original 0-based Location/LocationLink results, including base classes or members returned by the server. Returns [] for no result. Read-only.'
     : name === 'code_actions_preview'
       ? 'Preview quickfix candidates for a 1-based UTF-16 range (end exclusive; zero-width cursor allowed) using fresh matching Python diagnostics. Returns import/suppression classification, file edits, boundaries and context-bound selection IDs. Never applies edits, executes commands or resolves deferred actions.'
+    : name === 'rename_preview'
+      ? 'Preview Python rename edits at a 1-based UTF-16 position and new_name. Uses advertised prepareRename, NFKC-stable Unicode XID name validation and a conservative reserved-name policy. Returns original file changes and context-bound selection IDs. Never writes files or executes commands.'
     : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(parameters[name] ?? positionFields) }, required: ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)] },
@@ -63,9 +66,11 @@ async function dispatch(message) {
     if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
     if (!documentSymbols && !projectSymbols && !quickfixPreview && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
     if (projectSymbols && (typeof args.query !== 'string' || !args.query.trim())) throw new Error('Expected a non-blank string query');
+    if (name === 'rename_preview') validatePythonName(args.new_name);
     const project = await resolveProject(args.file, args.workspace_root);
     active = new LspSession(project); await active.start();
     if (quickfixPreview) return toolResult(await codeActionsPreview(project, active, args));
+    if (name === 'rename_preview') return toolResult(await renamePreview(project, active, args));
     if (documentSymbols && !active.capabilities.documentSymbolProvider) throw new Error('ty server does not support textDocument/documentSymbol');
     if (projectSymbols && !active.capabilities.workspaceSymbolProvider) throw new Error('ty server does not support workspace/symbol');
     if (name === 'type_definition' && !active.capabilities.typeDefinitionProvider) throw new Error('ty server does not support textDocument/typeDefinition');
