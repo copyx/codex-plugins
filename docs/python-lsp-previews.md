@@ -16,7 +16,8 @@ surrogate 경계를 검사한다. 끝은 exclusive이며 cursor 범위도 허용
 
 상태 우선순위는 disabled → requires_command → requires_resolve → unsupported_edit → edit_available → unavailable이다.
 명령과 지연 data가 동시에 있을 수 있으므로 command/needs_resolve/issues도 함께 제공한다.
-edit_available도 현재 도구에서는 미리보기 상태다. workspace/applyEdit는 기존 클라이언트가 거부한다.
+edit_available도 이 미리보기 도구에서는 읽기 전용 상태다. 별도 [선택 quickfix 적용](python-lsp-apply.md#선택-빠른-수정-적용--orca-76)은
+새 조회와 ID 일치를 확인한다. workspace/applyEdit는 기존 클라이언트가 거부한다.
 workspace/executeCommand와 codeAction/resolve를 요청하거나 WorkspaceEdit를 파일에 적용하는 코드는 없다.
 동적 capability나 resolveSupport를 광고하지 않는다. literal quickfix와 disabled 지원만 추가했다.
 
@@ -79,7 +80,8 @@ buildPreview는 basis.tool과 request를 ID에 묶고 서버 action/edit에서 s
 호출자는 build 후 basis와 후보의 targets를 assertBasisCurrent로 재검증해야 한다.
 이름 변경은 별도 lib/rename.mjs가 아래 정책으로 이 표면을 사용한다.
 기존 파일 텍스트 적용은 [#75 내부 엔진](python-lsp-apply.md)에 분리했다.
-사용자 쓰기 MCP·후속 진단·명령 정책·resolve 이후 새 편집 수용은 후속 항목의 별도 책임이다.
+사용자 quickfix 쓰기 MCP·후속 진단은 #76에서 분리했다. 이름 변경 적용은 후속 항목이며,
+서버 명령 실행과 resolve 이후 새 편집 수용은 현재 지원하지 않는다.
 
 ## 이름 변경 — Orca #74
 

@@ -213,7 +213,7 @@ async function appServer(options, env, work, installed, navigate = true) {
       const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
       const pythonManifest = JSON.parse(await readFile(path.join(repo, 'plugins/python-lsp/.codex-plugin/plugin.json'), 'utf8'));
       assert.equal(pythonServer?.serverInfo?.version, pythonManifest.version);
-      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['code_actions_preview', 'definition', 'document_symbols', 'hover', 'implementation', 'project_symbols', 'references', 'rename_preview', 'type_definition']);
+      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['code_action_apply', 'code_actions_preview', 'definition', 'document_symbols', 'hover', 'implementation', 'project_symbols', 'references', 'rename_preview', 'type_definition']);
       const requests = {
         document_symbols: { file: 'symbols.py' },
         project_symbols: { file: 'search-a/main.py', query: 'HiddenAlpha' },
@@ -308,6 +308,24 @@ async function appServer(options, env, work, installed, navigate = true) {
           assert.ok(!none.isError); assert.equal(JSON.parse(none.content[0].text).status, 'not_renamable');
         }
       }
+      const application = pythonServer.tools.code_action_apply;
+      assert.equal(application.annotations.readOnlyHint, false); assert.equal(application.annotations.destructiveHint, true); assert.equal(application.annotations.idempotentHint, false);
+      assert.deepEqual(application.inputSchema.required, ['workspace_root', 'file', 'range', 'selection_id']);
+      const args = { workspace_root: work, file: 'apply-quickfix.py', range: { start: { line: 1, character: 10 }, end: { line: 1, character: 16 } } };
+      const pythonCall = (tool, arguments_) => rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: arguments_ });
+      const original = await readFile(path.join(work, args.file), 'utf8');
+      const shown = await pythonCall('code_actions_preview', args); assert.ok(!shown.isError);
+      const selected = JSON.parse(shown.content[0].text).result.find(p => p.category === 'import'); assert.ok(selected);
+      assert.equal(await readFile(path.join(work, args.file), 'utf8'), original, 'Python preview must not write');
+      const forged = await pythonCall('code_action_apply', { ...args, selection_id: selected.selection_id, edit: {} }); assert.equal(forged.isError, true);
+      const response = await pythonCall('code_action_apply', { ...args, selection_id: selected.selection_id }); assert.ok(!response.isError, response.content?.[0]?.text);
+      const result = JSON.parse(response.content[0].text).result;
+      assert.equal(result.status, 'applied'); assert.equal(result.diagnostics_status, 'received'); assert.equal(result.files.length, 1);
+      assert.ok(result.diagnostics.every(d => d.status === 'received' && d.omitted_diagnostics === 0 && !d.diagnostics.some(e => e.code === 'unresolved-reference')));
+      const changed = await readFile(path.join(work, args.file), 'utf8'); assert.match(changed, /from utils import square/); assert.ok(!changed.includes('ignore'));
+      assert.equal((await pythonCall('code_action_apply', { ...args, selection_id: selected.selection_id })).isError, true);
+      assert.equal(await readFile(path.join(work, args.file), 'utf8'), changed);
+      await writeFile(path.join(work, args.file), original); // Restore only this temporary write fixture before mixed-hook checks.
     }
     const bundleRoot = path.dirname(path.dirname(hook.sourcePath));
     const manifest = JSON.parse(await readFile(path.join(bundleRoot, '.codex-plugin/plugin.json'), 'utf8'));
@@ -542,11 +560,13 @@ export async function runCodexVerification(options, { installed = false } = {}) 
       sources['impl_formal.py'] = 'from impl_base import Greeter\nclass FormalGreeter(Greeter):\n    def greet(self, name: str) -> str:\n        return "Hello " + name\n';
       sources['impl-use.py'] = 'from impl_base import Greeter\nfrom impl_friendly import FriendlyGreeter\nfrom impl_formal import FormalGreeter\nservice: Greeter = FriendlyGreeter()\n# No implementation here.\n';
       sources['quickfix.py'] = 'answer = square(2)\n';
+      sources['apply-quickfix.py'] = 'answer = square(2)\n';
       sources['utils.py'] = 'def square(value: int) -> int:\n    return value * value\n';
       sources['rename_model.py'] = 'class Greeter:\n    pass\n';
       sources['rename-use.py'] = 'from rename_model import Greeter\nitem = Greeter()\n# no symbol\n';
       sources['rename-unrelated.py'] = 'def local():\n    class Greeter:\n        pass\n    return Greeter()\n';
       for (const file of ['main.py', 'symbols.py', 'empty.py', 'type_models.py', 'type_api.pyi', 'type-use.py', 'type-empty.py', 'impl_base.py', 'impl_friendly.py', 'impl_formal.py', 'impl-use.py', 'quickfix.py', 'utils.py', 'rename_model.py', 'rename-use.py', 'rename-unrelated.py']) await writeFile(path.join(work, file), sources[file]);
+      await writeFile(path.join(work, 'apply-quickfix.py'), sources['apply-quickfix.py']);
       for (const [name, symbol] of [['search-a', 'HiddenAlpha'], ['search-b', 'HiddenBeta']]) {
         await mkdir(path.join(work, name));
         await symlink(options.pythonEnv, path.join(work, name, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
@@ -578,7 +598,7 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview', 'rename_preview'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview', 'rename_preview', 'code_action_apply'], pythonApplicationTools: ['code_action_apply'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }

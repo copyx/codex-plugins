@@ -3,12 +3,14 @@ import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 import { codeActionsPreview } from './lib/preview.mjs';
 import { renamePreview, validatePythonName } from './lib/rename.mjs';
+import { applyCodeAction } from './lib/operations.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction', rename_preview: 'textDocument/rename' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction', rename_preview: 'textDocument/rename', code_action_apply: 'textDocument/codeAction' };
 const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
 const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
 const pointSchema = { type: 'object', additionalProperties: false, properties: positionFields, required: ['line', 'character'] };
 const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } }, code_actions_preview: { range: { type: 'object', additionalProperties: false, properties: { start: pointSchema, end: pointSchema }, required: ['start', 'end'] } }, rename_preview: { ...positionFields, new_name: { type: 'string', minLength: 1, maxLength: 256 } } };
+parameters.code_action_apply = { ...parameters.code_actions_preview, selection_id: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', minLength: 71, maxLength: 71 } };
 function toolResult(output) {
   const text = JSON.stringify(output);
   if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');
@@ -43,8 +45,10 @@ const tools = Object.keys(methods).map(name => ({
       ? 'Preview quickfix candidates for a 1-based UTF-16 range (end exclusive; zero-width cursor allowed) using fresh matching Python diagnostics. Returns import/suppression classification, file edits, boundaries and context-bound selection IDs. Never applies edits, executes commands or resolves deferred actions.'
     : name === 'rename_preview'
       ? 'Preview Python rename edits at a 1-based UTF-16 position and new_name. Uses advertised prepareRename, NFKC-stable Unicode XID name validation and a conservative reserved-name policy. Returns original file changes and context-bound selection IDs. Never writes files or executes commands.'
+    : name === 'code_action_apply'
+      ? 'Apply exactly the explicitly selected quickfix preview to existing local Python files. Provide the original workspace_root, file, 1-based UTF-16 range and selection_id only. Requeries fresh diagnostics and candidates; rejects stale, command, deferred, disabled and unsupported edits. Writes files; returns application outcome separately from new-session post-apply diagnostics. Never auto-selects or executes server commands.'
     : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
-  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  annotations: { readOnlyHint: name !== 'code_action_apply', destructiveHint: name === 'code_action_apply', ...(name === 'code_action_apply' ? { idempotentHint: false } : {}), openWorldHint: false },
   inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(parameters[name] ?? positionFields) }, required: ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)] },
 }));
 let active;
@@ -61,15 +65,21 @@ async function dispatch(message) {
     const documentSymbols = name === 'document_symbols';
     const projectSymbols = name === 'project_symbols';
     const quickfixPreview = name === 'code_actions_preview';
+    const quickfixApply = name === 'code_action_apply';
     const locationRequest = name === 'type_definition' || name === 'implementation';
     const allowed = ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)];
     if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
-    if (!documentSymbols && !projectSymbols && !quickfixPreview && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
+    if (!documentSymbols && !projectSymbols && !quickfixPreview && !quickfixApply && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
     if (projectSymbols && (typeof args.query !== 'string' || !args.query.trim())) throw new Error('Expected a non-blank string query');
     if (name === 'rename_preview') validatePythonName(args.new_name);
+    if (quickfixApply && (typeof args.selection_id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(args.selection_id))) throw new Error('selection_id must be a preview sha256 ID');
     const project = await resolveProject(args.file, args.workspace_root);
     active = new LspSession(project); await active.start();
     if (quickfixPreview) return toolResult(await codeActionsPreview(project, active, args));
+    if (quickfixApply) {
+      const output = await applyCodeAction(project, active, args);
+      return { ...toolResult(output), ...(output.result.status === 'applied' ? {} : { isError: true }) };
+    }
     if (name === 'rename_preview') return toolResult(await renamePreview(project, active, args));
     if (documentSymbols && !active.capabilities.documentSymbolProvider) throw new Error('ty server does not support textDocument/documentSymbol');
     if (projectSymbols && !active.capabilities.workspaceSymbolProvider) throw new Error('ty server does not support workspace/symbol');
@@ -85,7 +95,11 @@ async function dispatch(message) {
     if (projectSymbols) output.search_scope = { kind: 'selected_project_session', workspace_root: project.workspace, project_root: project.root, config: project.config, anchor_file: project.file };
     return toolResult(output);
   } catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
-  finally { await active?.close(); active = undefined; }
+  finally {
+    // Cleanup must not replace an already observed application outcome.
+    try { await active?.close(); } catch { try { active?.kill(); } catch { /* preserve outcome */ } }
+    active = undefined;
+  }
 }
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let stopping = false;

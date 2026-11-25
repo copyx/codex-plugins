@@ -1,7 +1,7 @@
-# Python 내부 텍스트 적용 엔진 — Orca #75
+# Python 텍스트 적용 계약 — Orca #75·#76
 
 `plugins/python-lsp/lib/apply.mjs`는 #73·#74 미리보기의 기존 파일 텍스트 편집을 적용하는 **내부 모듈**이다.
-사용자 MCP는 여전히 읽기 전용 9개다. 빠른 수정/이름 변경 쓰기 도구와 후속 진단은 #76·#77의 별도 책임이다.
+#75는 외부 쓰기 도구를 추가하지 않았다. #76의 현재 MCP는 읽기 9개·선택 quickfix 쓰기 1개이며 이름 변경 적용은 #77에 남긴다.
 TS 적용의 검증·staging·파일별 교체·복구 패턴을 참고했지만 Python 번들 밖의 코드를 import하지 않는다.
 추가 의존성·패키지 설치·서버 명령 실행·preview 저장은 없다.
 
@@ -24,7 +24,43 @@ MCP 클라이언트가 보낸 raw edit/basis/preview를 전달하는 용도로 �
 시작 시 assertBasisCurrent를 호출한다. 자체 교체 후에는 알려진 자기 소유 anchor/target 바이트·식별만 좁게 갱신한
 검사용 basis와 anchor text overlay를 사용한다. 원래 config/환경/서버/operation 증거는 유지한다.
 이 overlay는 실제 LSP document를 sync하거나 버전을 올린 것으로 취급하지 않는다.
-후속 도구는 성공 뒤 기존 세션을 닫고 별도 새 진단을 받아야 한다.
+#76은 아래 별도 helper로 성공 뒤 기존 세션을 닫고 새 진단을 받는다.
+
+## 선택 빠른 수정 적용 — Orca #76
+
+`code_action_apply(workspace_root,file,range,selection_id)`는 원래 1-based UTF-16 범위와
+preview의 sha256 ID만 받는다. additionalProperties=false이며 raw edit/basis/command/복수 선택을 거부한다.
+새 MCP 호출의 새 LSP 세션에서 새 진단·codeAction 후보를 얻고 ID가 일치하는 후보가 **정확히 하나**인지 확인한다.
+canonical 요청·선택 context·target preimage는 기존 preview ID에 포함된다.
+후보가 없거나 둘 이상 일치하면 거부한다. 첫 후보나 진단 억제 후보를 자동 선택하지 않는다.
+command/deferred/disabled/unsupported 상태를 edit_available로 승격하거나 resolve/명령을 실행하지 않는다.
+
+독립 `lib/operations.mjs`의 applyCodeAction(project,session,args,options={})가 이 흐름을 연결한다.
+options는 내부 엔진 I/O 실패 주입용이며 MCP 입력이 아니다. 선택된 후보를 수정하지 않고 applyPreview에 전달한다.
+반환은 workspace/project/config/environment/server와 result다. result에는 status/selection_id/files/recovery와 별도 진단 상태가 있다.
+엔진 rejected/rolled_back/recovery_incomplete는 구조화한 결과를 보존하면서 MCP isError=true로 표시하고,
+오래된 선택/잘못된 입력 등 사전 실패는 기존 오류 응답을 사용한다.
+
+postApplyDiagnostics(project,session,result)는 #77에서도 재사용할 수 있다.
+applied에만 원래 세션을 닫고 같은 선택 ty 절대 실행 경로로 별도 새 세션을 시작한다.
+project/config/environment와 대상 경계를 다시 확인하고 새 publishDiagnostics를 기다린다.
+결과를 applied_snapshot_in_new_session으로 표시하기 전 읽기 중 파일 identity/metadata가 안정적인지 확인하고,
+실제 disk SHA-256과 열린 text가 적용 결과의 바이트에 일치하는지 확인한다.
+이후 source가 달라지거나 서버/진단/cleanup이 실패하면 result.status=applied를 유지하고 diagnostics_status=incomplete와 이유를 반환한다.
+기존 apply_patch 훅이 자동으로 실행되는 경로는 아니다.
+
+성공한 새 수신은 received, 미수신/후속 오류는 incomplete, 미적용 엔진 결과는 not_run이다.
+rejected/rollback에는 후속 진단 세션을 시작하지 않는다. 진단만 실패했다고 이미 완료한 적용을 rollback하지 않는다.
+diagnostics_server에 실제 새 ty 버전/경로를 담는다. 이 메타데이터가 없으면 새 세션 준비가 실패했을 수 있다.
+진단 원형은 파일당 30개·전체 진단 데이터 256 KiB 내에서 보존하고 omitted_diagnostics/diagnostics_truncated로 생략을 표시한다.
+이 경우 빈 배열만으로 정상/무진단을 판정하지 않는다. 진단 출력 한도로 적용 성공 응답을 잃지 않도록 제한한다.
+후속 오류/cleanup 오류 텍스트도 각각 4096 UTF-16 단위로 제한하고 생략을 표시해 큰 서버 오류가 applied 응답을 가리지 않게 한다.
+
+실제 ty 0.0.109의 누락 import 후보는 서버 명령 없이 즉시 edit로 완결됐고,
+정상 MCP 및 격리 Codex에서 import가 추가된 뒤 새 unresolved-reference가 해소됐다.
+억제 후보와 utils/무관 파일은 자동으로 적용·변경하지 않았다. 중복 호출·변조/오래된 선택은 거부됐다.
+명령/지연/비활성/리소스/annotation/외부·중복 후보, 진단 startup/timeout/출력 생략과 별도 source 변경은
+통제 stdio fixture 증거다. 적용 롤백·진단 cleanup 오류는 내부 I/O/API 실패 주입 증거로 구분한다.
 
 ## 쓰기 전 정책
 
