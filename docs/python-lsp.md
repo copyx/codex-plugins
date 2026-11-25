@@ -23,6 +23,33 @@ flat SymbolInformation 형식을 변환하거나 flatten하지 않는다. 입력
 정적 검사 53파일과 `git diff --check`도 통과했다. 기본 격리 검증의 일회성 훅 신뢰 생략은
 임시 프로필에만 적용했고 사용자 프로필의 설치·설정·신뢰는 변경하지 않았다.
 
+## 후속 프로젝트 심볼 — Orca #70
+
+`project_symbols(workspace_root,file,query)`는 기존 resolveProject로 세션을 선택하고 anchor 파일을 동기화한 뒤
+`workspace/symbol`을 요청한다. query는 공백만이 아닌 문자열이고 위치 인자는 받지 않는다.
+workspaceSymbolProvider 미지원·LSP 오류·잘못된 응답 형식은 오류이며 null/빈 정상은 `[]`이다.
+`search_scope`의 kind=selected_project_session, workspace_root/project_root/config/anchor_file과
+기존 environment 필드로 실제 세션 선택을 표시한다. 응답 kind/location/range 등은 보존하고
+중첩 location.uri에도 workspace_boundary를 덧붙이며 외부 소스 내용을 별도로 읽지 않는다.
+
+실제 ty 0.0.109 관찰은 다음과 같다.
+
+- 프로젝트 a의 열지 않은 src/hidden.py 심볼 검색, 없는 이름의 `[]`.
+- 별도 ty.toml을 가진 a 기준 검색에는 b 심볼이 없고, b 기준 파일을 쓰면 b 심볼을 찾는다.
+- a의 environment.root에 ../b를 추가하고 import하면 definition은 b를 해석하지만 workspace/symbol에는 b 심볼이 없었다.
+- a의 `[src].exclude`로 지정한 파일은 검색되지 않았고 다른 미개방 파일은 검색됐다.
+- 부모 설정이 선택되는 기준 파일에서는 하위 b 심볼을 찾았다. 같은 workspace 경계여도 anchor의 선택이 다르다.
+
+따라서 import 해석 root와 심볼 인덱싱 범위를 동일시하거나 모든 형제 프로젝트의 절대 격리를 약속하지 않는다.
+결과를 bridge에서 project_root로 잘라 서버 동작을 숨기지도 않는다.
+[고정 환경 설정 문서](https://github.com/astral-sh/ty/blob/0.0.109/docs/reference/configuration.md)와
+[LSP 기능 문서](https://github.com/astral-sh/ty/blob/0.0.109/docs/features/language-server.md)를 확인했으며,
+검색 범위 판단의 직접 근거는 위 실제 fixture 호출이다. 사용자 설치·버전 마감은 이 항목에서 변경하지 않는다.
+
+2026-11-25 검증: Python 35개와 기존 TS 49개, 실패/건너뜀 0. 실제 격리 Codex에서
+Python 5개·TS 11개 목록/호출과 혼합 패치 2회·모델 요청 3회·언어별 새 오류/정상 결과를 확인했다.
+정적 검사 53파일과 `git diff --check`도 통과했다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.

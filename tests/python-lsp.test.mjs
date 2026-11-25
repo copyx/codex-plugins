@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists four read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists five read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,7 +81,7 @@ test('Python actual MCP lists four read-only tools; Unicode CRLF and .pyi calls 
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols']);
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
@@ -273,7 +273,7 @@ test('Python document_symbols MCP accepts file-only input and preserves real ty 
   assert.deepEqual(symbols,await session.request('textDocument/documentSymbol',{textDocument:{uri}}),'MCP must preserve every original LSP field and hierarchy');
   assert.equal(await readFile(project.file,'utf8'),source);
 });
-test('Python document_symbols preserves flat SymbolInformation and distinguishes null, unsupported capability and LSP error', async t => {
+test('Python symbol tools preserve LSP shapes and distinguish null, unsupported capability and LSP error', async t => {
   const root=await fixture(t);
   const command=path.join(root,'fixture-ty');
   const fake=String.raw`#!/usr/bin/env node
@@ -294,11 +294,11 @@ process.stdin.on('data', chunk => {
     const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length));
     buffer = buffer.subarray(end + 4 + length);
     if (message.method === 'initialize') {
-      send({ jsonrpc:'2.0', id:message.id, result:{ capabilities:{ definitionProvider:true, referencesProvider:true, hoverProvider:true, documentSymbolProvider:mode !== 'unsupported' } } });
-    } else if (message.method === 'textDocument/documentSymbol') {
+      send({ jsonrpc:'2.0', id:message.id, result:{ capabilities:{ definitionProvider:true, referencesProvider:true, hoverProvider:true, documentSymbolProvider:mode !== 'unsupported', workspaceSymbolProvider:mode !== 'unsupported' } } });
+    } else if (message.method === 'textDocument/documentSymbol' || message.method === 'workspace/symbol') {
       if (mode === 'error') send({ jsonrpc:'2.0', id:message.id, error:{ code:-32601, message:'documentSymbol unavailable' } });
       else {
-        const flat = [{ name:'FlatSymbol', kind:12, containerName:'module', location:{ uri:message.params.textDocument.uri, range:{ start:{ line:0, character:0 }, end:{ line:0, character:1 } } }, deprecated:false }];
+        const flat = [{ name:'FlatSymbol', kind:12, containerName:'module', location:{ uri:message.params.textDocument?.uri ?? 'file:///outside/library.py', range:{ start:{ line:0, character:0 }, end:{ line:0, character:1 } } }, deprecated:false }];
         send({ jsonrpc:'2.0', id:message.id, result:mode === 'null' ? null : mode === 'invalid' ? { unexpected:true } : flat });
       }
     } else if (message.method === 'shutdown') send({ jsonrpc:'2.0', id:message.id, result:null });
@@ -308,12 +308,60 @@ process.stdin.on('data', chunk => {
 `;
   await writeFile(command,fake);await chmod(command,0o755);
   if(!pythonEnv){await mkdir(path.join(root,'.venv/bin'),{recursive:true});await writeFile(path.join(root,'.venv/pyvenv.cfg'),'version = 3.15.2');await symlink(process.execPath,path.join(root,'.venv/bin/python'));}
-  const request=JSON.stringify(message(1,'document_symbols',{workspace_root:root,file:'main.py'}))+'\n';
-  const call=async mode=>{await writeFile(command,fake.replace('FIXTURE_SYMBOL_MODE',JSON.stringify(mode)));return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;};
+  const call=async(mode,name='document_symbols')=>{
+    const request=JSON.stringify(message(1,name,{workspace_root:root,file:'main.py',...(name==='project_symbols'?{query:'FlatSymbol'}:{})}))+'\n';
+    await writeFile(command,fake.replace('FIXTURE_SYMBOL_MODE',JSON.stringify(mode)));return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;
+  };
   const flat=await call('flat');assert.ok(!flat.isError,JSON.stringify(flat));
   assert.deepEqual(JSON.parse(flat.content[0].text).result,[{name:'FlatSymbol',kind:12,containerName:'module',location:{uri:`file://${root}/main.py`,range:{start:{line:0,character:0},end:{line:0,character:1}}},deprecated:false}]);
   assert.deepEqual(JSON.parse((await call('null')).content[0].text).result,[]);
   const unsupported=await call('unsupported');assert.equal(unsupported.isError,true);assert.match(unsupported.content[0].text,/documentSymbol|document_symbols/);
   const error=await call('error');assert.equal(error.isError,true);assert.match(error.content[0].text,/-32601.*unavailable/);
   const invalid=await call('invalid');assert.equal(invalid.isError,true);assert.match(invalid.content[0].text,/documentSymbol.*array or null/);
+  const project=await call('flat','project_symbols');assert.ok(!project.isError,JSON.stringify(project));
+  assert.deepEqual(JSON.parse(project.content[0].text).result,[{name:'FlatSymbol',kind:12,containerName:'module',location:{uri:'file:///outside/library.py',range:{start:{line:0,character:0},end:{line:0,character:1}}},deprecated:false,workspace_boundary:'outside'}]);
+  assert.deepEqual(JSON.parse((await call('null','project_symbols')).content[0].text).result,[]);
+  for(const mode of ['unsupported','error','invalid']){const r=await call(mode,'project_symbols');assert.equal(r.isError,true);assert.match(r.content[0].text,/workspace\/symbol|-32601/);}
+});
+test('Python project_symbols finds unopened files in the selected project and separates sibling settings', real, async t => {
+  const root=await fixture(t);
+  for (const [name,symbol] of [['a','HiddenAlpha'],['b','HiddenBeta']]) {
+    await mkdir(path.join(root,name,'src'),{recursive:true});await symlink(pythonEnv,path.join(root,name,'.venv'));
+    await writeFile(path.join(root,name,'ty.toml'),'[environment]\nroot = ["src"]\n');
+    await writeFile(path.join(root,name,'main.py'),'# anchor only\n');
+    await writeFile(path.join(root,name,'src/hidden.py'),`class ${symbol}:\n    pass\n`);
+  }
+  await symlink('/etc/hosts',path.join(root,'a/escape.py'));
+  const args={workspace_root:root,file:'a/main.py',query:'HiddenAlpha'};
+  const requests=[{jsonrpc:'2.0',id:1,method:'tools/list'},message(2,'project_symbols',args),message(3,'project_symbols',{...args,query:'NoSuchSymbolAnywhere'}),message(4,'project_symbols',{...args,query:'HiddenBeta'}),message(5,'project_symbols',{...args,file:'b/main.py',query:'HiddenBeta'}),message(6,'project_symbols',{...args,file:'../outside.py'}),message(7,'project_symbols',{...args,file:'a/escape.py'}),...['','  ',null,12].map((query,i)=>message(i+8,'project_symbols',{...args,query})),message(12,'project_symbols',{...args,line:1})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const tool=responses[0].result.tools.find(t=>t.name==='project_symbols');assert.ok(tool,'project_symbols must be advertised');
+  assert.deepEqual(tool.inputSchema.required,['workspace_root','file','query']);assert.deepEqual(Object.keys(tool.inputSchema.properties),['workspace_root','file','query']);assert.equal(tool.annotations.readOnlyHint,true);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text);};
+  const found=value(2);assert.equal(found.result[0].name,'HiddenAlpha');assert.equal(found.result[0].kind,5);assert.match(found.result[0].location.uri,/a\/src\/hidden.py$/);assert.equal(found.result[0].workspace_boundary,'inside');
+  assert.deepEqual(found.search_scope,{kind:'selected_project_session',workspace_root:root,project_root:path.join(root,'a'),config:path.join(root,'a/ty.toml'),anchor_file:path.join(root,'a/main.py')});
+  assert.deepEqual(value(3).result,[]);assert.deepEqual(value(4).result,[]);assert.equal(value(5).result[0].name,'HiddenBeta');assert.equal(value(5).search_scope.project_root,path.join(root,'b'));
+  for(const id of [6,7,8,9,10,11,12])assert.equal(responses.find(r=>r.id===id).result.isError,true);
+  const project=await resolveProject('a/main.py',root,{env:{}}),session=new LspSession(project,{command:ty});t.after(()=>session.close());
+  await session.start();await session.sync(project.file);const raw=await session.request('workspace/symbol',{query:'HiddenAlpha'});
+  assert.deepEqual(found.result.map(({workspace_boundary,...symbol})=>symbol),raw);
+});
+test('Python project_symbols distinguishes import roots, excluded files and the anchor-selected project scope', real, async t => {
+  const root=await fixture(t);
+  for (const name of ['a','b']) {await mkdir(path.join(root,name),{recursive:true});await symlink(pythonEnv,path.join(root,name,'.venv'));}
+  await writeFile(path.join(root,'a/ty.toml'),'[environment]\nroot = [".", "../b"]\n[src]\nexclude = ["excluded.py"]\n');
+  await writeFile(path.join(root,'b/ty.toml'),'[environment]\nroot = ["."]\n');
+  await writeFile(path.join(root,'b/remote.py'),'class ImportedSibling:\n    pass\n');
+  await writeFile(path.join(root,'a/main.py'),'from remote import ImportedSibling\ninstance = ImportedSibling()\n');
+  await writeFile(path.join(root,'a/local.py'),'class LocalIncluded:\n    pass\n');
+  await writeFile(path.join(root,'a/excluded.py'),'class ExcludedLocal:\n    pass\n');
+  const anchor={workspace_root:root,file:'a/main.py'};
+  const requests=[message(1,'project_symbols',{...anchor,query:'ImportedSibling'}),message(2,'definition',{...anchor,line:2,character:13}),message(3,'project_symbols',{...anchor,query:'LocalIncluded'}),message(4,'project_symbols',{...anchor,query:'ExcludedLocal'}),message(5,'project_symbols',{...anchor,file:'main.py',query:'ImportedSibling'})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text);};
+  assert.equal(value(1).search_scope.project_root,path.join(root,'a'));assert.deepEqual(value(1).result,[]);
+  assert.match(value(2).result[0].uri??value(2).result[0].targetUri,/b\/remote.py$/,'configured sibling import resolves even when absent from workspace/symbol');
+  assert.ok(value(3).result.some(s=>s.name==='LocalIncluded'));assert.deepEqual(value(4).result,[]);
+  assert.equal(value(5).search_scope.project_root,root);
+  assert.ok(value(5).result.some(s=>s.name==='ImportedSibling'&&s.location.uri.endsWith('/b/remote.py')),'the parent-selected project can include the sibling');
 });

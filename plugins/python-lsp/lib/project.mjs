@@ -146,7 +146,7 @@ export function patchFiles(patch) {
 export async function markLocations(result, workspace) {
   if (Array.isArray(result)) return Promise.all(result.map(r => markLocations(r, workspace)));
   if (!result || typeof result !== 'object') return result;
-  const uri = result.uri ?? result.targetUri;
+  const uri = result.uri ?? result.targetUri ?? result.location?.uri;
   if (!uri) return result;
   let boundary = 'external_uri';
   try {

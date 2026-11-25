@@ -2,15 +2,18 @@ import { createInterface } from 'node:readline';
 import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol' };
 const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
 const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
+const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } } };
 const tools = Object.keys(methods).map(name => ({
   name, description: name === 'document_symbols'
     ? 'List symbols in one local .py/.pyi file using ty 0.0.109. Use absolute workspace_root and file, without line/character. Preserves hierarchical LSP DocumentSymbol children or flat SymbolInformation with 0-based UTF-16 ranges. Returns [] when no symbols exist. Read-only.'
+    : name === 'project_symbols'
+      ? 'Search symbol names in the ty session selected by the anchor file and its Python project/config/environment. Use absolute workspace_root, file, and a non-blank query. Returns selected search_scope and original symbol locations/kinds with workspace boundary labels. This does not promise repository-wide coverage or a hard project-root filter. Read-only.'
     : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(name === 'document_symbols' ? {} : positionFields) }, required: ['workspace_root', 'file', ...(name === 'document_symbols' ? [] : ['line', 'character'])] },
+  inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(parameters[name] ?? positionFields) }, required: ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)] },
 }));
 let active;
 async function dispatch(message) {
@@ -24,18 +27,22 @@ async function dispatch(message) {
     const { name, arguments: args } = message.params ?? {};
     if (!Object.hasOwn(methods, name)) throw new Error('Unknown tool');
     const documentSymbols = name === 'document_symbols';
-    const allowed = documentSymbols ? ['workspace_root', 'file'] : ['workspace_root', 'file', 'line', 'character'];
+    const projectSymbols = name === 'project_symbols';
+    const allowed = ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)];
     if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
-    if (!documentSymbols && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
+    if (!documentSymbols && !projectSymbols && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
+    if (projectSymbols && (typeof args.query !== 'string' || !args.query.trim())) throw new Error('Expected a non-blank string query');
     const project = await resolveProject(args.file, args.workspace_root);
     active = new LspSession(project); await active.start();
     if (documentSymbols && !active.capabilities.documentSymbolProvider) throw new Error('ty server does not support textDocument/documentSymbol');
+    if (projectSymbols && !active.capabilities.workspaceSymbolProvider) throw new Error('ty server does not support workspace/symbol');
     const uri = await active.sync(project.file);
-    const params = { textDocument: { uri }, ...(documentSymbols ? {} : { position: active.position(uri, args.line, args.character) }), ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
+    const params = projectSymbols ? { query: args.query } : { textDocument: { uri }, ...(documentSymbols ? {} : { position: active.position(uri, args.line, args.character) }), ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
     const response = await active.request(methods[name], params);
-    if (documentSymbols && response !== null && !Array.isArray(response)) throw new Error('Invalid documentSymbol response: expected array or null');
-    const result = documentSymbols ? response ?? [] : await markLocations(response, project.workspace);
+    if ((documentSymbols || projectSymbols) && response !== null && !Array.isArray(response)) throw new Error(`Invalid ${methods[name]} response: expected array or null`);
+    const result = documentSymbols ? response ?? [] : await markLocations(projectSymbols ? response ?? [] : response, project.workspace);
     const output = { workspace_root: project.workspace, project_root: project.root, config: project.config, environment: project.environment, server: { name: 'ty', version: '0.0.109', executable: active.command, configuration_source: active.runtime.source }, result };
+    if (projectSymbols) output.search_scope = { kind: 'selected_project_session', workspace_root: project.workspace, project_root: project.root, config: project.config, anchor_file: project.file };
     const text = JSON.stringify(output);
     if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');
     return { content: [{ type: 'text', text }] };

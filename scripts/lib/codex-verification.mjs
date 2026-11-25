@@ -213,10 +213,10 @@ async function appServer(options, env, work, installed, navigate = true) {
       const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
       const pythonManifest = JSON.parse(await readFile(path.join(repo, 'plugins/python-lsp/.codex-plugin/plugin.json'), 'utf8'));
       assert.equal(pythonServer?.serverInfo?.version, pythonManifest.version);
-      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'document_symbols', 'hover', 'references']);
-      for (const tool of ['definition', 'references', 'hover', 'document_symbols']) {
+      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'document_symbols', 'hover', 'project_symbols', 'references']);
+      for (const tool of ['definition', 'references', 'hover', 'document_symbols', 'project_symbols']) {
         assert.equal(pythonServer.tools[tool].annotations.readOnlyHint, true);
-        const arguments_ = tool === 'document_symbols' ? { workspace_root: work, file: 'symbols.py' } : { workspace_root: work, file: 'main.py', line: 3, character: 2 };
+        const arguments_ = tool === 'document_symbols' ? { workspace_root: work, file: 'symbols.py' } : tool === 'project_symbols' ? { workspace_root: work, file: 'search-a/main.py', query: 'HiddenAlpha' } : { workspace_root: work, file: 'main.py', line: 3, character: 2 };
         const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: arguments_ });
         assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
         const output = JSON.parse(result.content[0].text);
@@ -235,6 +235,20 @@ async function appServer(options, env, work, installed, navigate = true) {
           assert.equal(data.find(s => s.name === 'decorate').kind, 12);
           const empty = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file: 'empty.py' } });
           assert.ok(!empty.isError); assert.deepEqual(JSON.parse(empty.content[0].text).result, []);
+        }
+        if (tool === 'project_symbols') {
+          assert.deepEqual(pythonServer.tools[tool].inputSchema.required, ['workspace_root', 'file', 'query']);
+          assert.equal(output.search_scope.project_root, path.join(work, 'search-a'));
+          assert.equal(output.search_scope.config, path.join(work, 'search-a/ty.toml'));
+          assert.equal(output.search_scope.anchor_file, path.join(work, 'search-a/main.py'));
+          assert.ok(data.some(s => s.name === 'HiddenAlpha' && s.kind === 5 && s.location.uri.endsWith('/search-a/hidden.py')));
+          const search = async (file, query) => {
+            const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: { workspace_root: work, file, query } });
+            assert.ok(!result.isError); return JSON.parse(result.content[0].text).result;
+          };
+          assert.deepEqual(await search('search-a/main.py', 'NoSuchSymbolAnywhere'), []);
+          assert.deepEqual(await search('search-a/main.py', 'HiddenBeta'), []);
+          assert.ok((await search('search-b/main.py', 'HiddenBeta')).some(s => s.name === 'HiddenBeta'));
         }
       }
     }
@@ -463,6 +477,13 @@ export async function runCodexVerification(options, { installed = false } = {}) 
       sources['symbols.py'] = 'class Greeter:\n    def greet(self, name: str) -> str:\n        return name\n\ndef decorate(text: str) -> str:\n    return text\n';
       sources['empty.py'] = '# No symbols here.\n';
       for (const file of ['main.py', 'symbols.py', 'empty.py']) await writeFile(path.join(work, file), sources[file]);
+      for (const [name, symbol] of [['search-a', 'HiddenAlpha'], ['search-b', 'HiddenBeta']]) {
+        await mkdir(path.join(work, name));
+        await symlink(options.pythonEnv, path.join(work, name, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
+        for (const [file, text] of Object.entries({ 'ty.toml': '[environment]\nroot = ["."]\n', 'main.py': '# anchor\n', 'hidden.py': `class ${symbol}:\n    pass\n` })) {
+          sources[`${name}/${file}`] = text; await writeFile(path.join(work, name, file), text);
+        }
+      }
       if (options.useRuntimeConfig) {
         env.HOME = path.join(temp, 'runtime-home');
         const directory = path.join(env.HOME, '.config/codex-python-lsp');
@@ -487,7 +508,7 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols', 'project_symbols'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }
