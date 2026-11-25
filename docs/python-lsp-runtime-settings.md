@@ -1,4 +1,8 @@
-# Python 0.1.1 사용자 런타임 설정
+# Python 사용자 런타임 설정 — 0.1.1 이상
+
+0.2.0 후보도 아래 사용자 JSON/명시 환경 선택 계약을 유지한다.
+새 후보의 실제 11개 도구·혼합 훅 검증은 [0.2.0 마감 기록](python-lsp-release-0.2.0.md)과 구분해 읽는다.
+다음 설치·GUI 관찰은 0.1.1을 적용했을 당시 기록이다.
 
 Orca #66 후속. 기존 0.1.0은 `PYTHON_LSP_TY`를 받은 별도 실행기에서만 동작했고,
 실행기 없이 시작한 실제 사용자 app-server의 세 MCP 호출 모두 환경 누락으로 실패했다.
@@ -53,7 +57,7 @@ node --test --test-reporter=tap tests/*.test.mjs
 신뢰 우회 옵션은 사용하지 않는다. 그 외 전제 변수는 [기존 검증 절차](python-lsp.md#재현-명령)와 같다.
 
 실제 사용자 프로필에서는 Python 훅을 검토 전 신뢰하지 않는다.
-최종 설치 버전은 0.1.1이며 검토 경로는 `/hooks` → `PostToolUse` →
+당시 사용자 설치 버전은 0.1.1이며 검토 경로는 `/hooks` → `PostToolUse` →
 `Checking Python diagnostics`, 출처 `python-lsp@copyx-python-preview`이다.
 임시 프로필의 정상 신뢰 검사를 사용자 검토 완료로 보고하지 않는다.
 

@@ -13,10 +13,10 @@ function send(message) { const body = JSON.stringify(message); process.stdout.wr
 function handle(message) {
   if (message.method) audit.methods.push(message.method);
   if (message.id === 'server-edit') audit.applyEditResult = message.result;
-  if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {
+  if (message.method === 'initialize') { audit.clientInfo = message.params.clientInfo; send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {
     definitionProvider: true, referencesProvider: true, hoverProvider: true,
     codeActionProvider: mode === 'unsupported' ? false : { codeActionKinds: mode === 'not-quickfix' ? ['source.organizeImports'] : ['quickfix'], resolveProvider: true },
-  } } });
+  } } }); }
   else if (['textDocument/didOpen', 'textDocument/didChange'].includes(message.method)) {
     uri = message.params.textDocument.uri;
     if (mode !== 'incomplete') send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, version: message.params.textDocument.version,

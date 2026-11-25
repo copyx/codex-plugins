@@ -1,26 +1,26 @@
-# Python LSP
+# Python LSP 0.2.0 릴리스 후보
 
 Python 파일의 **정의·타입 정의·구현·참조·호버·문서 심볼·프로젝트 심볼**을 조회하고 Codex `apply_patch` 편집 뒤 변경 파일의
-타입 진단을 전달합니다. 현재 작업 브랜치는 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
+타입 진단을 전달합니다. 0.2.0 후보는 읽기 전용 도구 9개와 선택한 빠른 수정·이름 변경 적용 도구 2개를 제공합니다.
 TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단이 따로 전달됩니다.
-문서·프로젝트 심볼과 타입 정의·구현·미리보기·빠른 수정/이름 변경 적용은 후속 확장 중인 기능입니다. 기존 0.1.1 설치본에 자동 반영된 것은 아니므로 실제 도구 목록을 확인하세요.
+기존 0.1.1의 3개 도구 설치본에는 자동 반영되지 않습니다. 이 안내는 로컬 0.2.0 후보를 대상으로 하며 원격 main이나 기존 preview 설치가 갱신됐다는 뜻이 아닙니다.
 
 ## LSP 기능
 
 | LSP 기능 | 제공 여부 | 사용자에게 제공되는 범위 |
 | --- | --- | --- |
 | 정의 탐색 (Definition) | 제공 | `definition`으로 지정한 위치의 정의 조회 |
-| 타입 정의 탐색 (Type Definition) | 작업 브랜치 제공 | `type_definition`으로 지정한 위치가 사용하는 타입 선언 조회; 변수 자체의 정의와 다를 수 있고 .pyi 선언도 반환 |
-| 구현 탐색 (Implementation) | 작업 브랜치 제공 | `implementation`으로 클래스/멤버의 구현 위치 조회; ty가 반환한 기반 위치 자체도 보존 |
+| 타입 정의 탐색 (Type Definition) | 제공 | `type_definition`으로 지정한 위치가 사용하는 타입 선언 조회; 변수 자체의 정의와 다를 수 있고 .pyi 선언도 반환 |
+| 구현 탐색 (Implementation) | 제공 | `implementation`으로 클래스/멤버의 구현 위치 조회; ty가 반환한 기반 위치 자체도 보존 |
 | 참조 탐색 (References) | 제공 | `references`로 선언을 포함한 참조 조회 |
 | 호버 (Hover) | 제공 | `hover`로 지정한 위치의 타입·설명 조회 |
-| 문서 심볼 (Document Symbol) | 작업 브랜치 제공 | `document_symbols(workspace_root,file)`로 한 파일의 함수·클래스·메서드 조회; 자식 계층·이름·종류·범위를 보존 |
-| 프로젝트 심볼 검색 (Workspace Symbol) | 작업 브랜치 제공 | `project_symbols(workspace_root,file,query)`로 기준 파일이 선택한 ty 프로젝트 세션에서 이름 검색; 선택한 프로젝트·설정·기준 파일 표시 |
+| 문서 심볼 (Document Symbol) | 제공 | `document_symbols(workspace_root,file)`로 한 파일의 함수·클래스·메서드 조회; 자식 계층·이름·종류·범위를 보존 |
+| 프로젝트 심볼 검색 (Workspace Symbol) | 제공 | `project_symbols(workspace_root,file,query)`로 기준 파일이 선택한 ty 프로젝트 세션에서 이름 검색; 선택한 프로젝트·설정·기준 파일 표시 |
 | 편집 후 타입 진단 (Diagnostics) | 조건부 제공 | 신뢰한 `apply_patch` 훅이 추가·수정·이동된 파일을 검사 |
-| 빠른 수정 미리보기 (Code Action) | 작업 브랜치 제공 | `code_actions_preview`로 새 진단 범위의 후보·파일 변경·선택 ID 확인; import 수정과 억제 후보 구분 |
-| 이름 변경 미리보기 (Rename) | 작업 브랜치 제공 | `rename_preview`로 선언·import·참조의 변경 파일/원문/선택 ID 조회; 원본 유지 |
-| 빠른 수정 실제 적용 | 작업 브랜치 제공 | `code_action_apply`로 명시한 선택 ID를 새 조회와 대조해 기존 파일의 완결된 텍스트 편집만 적용; 후속 새 진단은 별도 상태 |
-| 이름 변경 실제 적용 | 작업 브랜치 제공 | `rename_apply`로 원래 위치·새 이름·선택 ID를 새 조회와 대조해 기존 파일의 선언/import/참조 수정; 후속 새 진단은 별도 상태 |
+| 빠른 수정 미리보기 (Code Action) | 제공 | `code_actions_preview`로 새 진단 범위의 후보·파일 변경·선택 ID 확인; import 수정과 억제 후보 구분 |
+| 이름 변경 미리보기 (Rename) | 제공 | `rename_preview`로 선언·import·참조의 변경 파일/원문/선택 ID 조회; 원본 유지 |
+| 빠른 수정 실제 적용 | 제공 | `code_action_apply`로 명시한 선택 ID를 새 조회와 대조해 기존 파일의 완결된 텍스트 편집만 적용; 후속 새 진단은 별도 상태 |
+| 이름 변경 실제 적용 | 제공 | `rename_apply`로 원래 위치·새 이름·선택 ID를 새 조회와 대조해 기존 파일의 선언/import/참조 수정; 후속 새 진단은 별도 상태 |
 
 ## 필수 조건
 
@@ -57,7 +57,9 @@ export PYTHON_LSP_PYTHON=/absolute/path/to/project-venv
 
 ## 설치
 
-저장소 루트에서 마켓을 등록한 뒤 Python 플러그인을 선택합니다.
+0.2.0 후보가 있는 로컬 체크아웃의 저장소 루트에서 마켓을 등록한 뒤 Python 플러그인을 선택합니다.
+명령은 현재 Codex 프로필의 마켓/설치를 바꿉니다. 이미 같은 이름의 Git 마켓에서 main을 추적 중이면
+후보 설치를 위해 그 소스를 덮어쓰지 말고 별도 테스트 프로필이나 독립 preview 마켓을 사용하세요.
 
 ```sh
 codex plugin marketplace add "$PWD" --json

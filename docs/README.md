@@ -7,6 +7,7 @@ Python 사용자는 [Python LSP 사용자 안내](../plugins/python-lsp/README.m
 
 | 문서 | 내용 |
 | --- | --- |
+| [Python 0.2.0 후보 마감](python-lsp-release-0.2.0.md) | 11개 도구·버전/메타데이터·독립 캐시·env/JSON·신뢰 통합과 배포 전 경계 |
 | [구현 계획](implementation-plan.md) | 작업 범위, 설계 선택, 구현·검증 순서 |
 | [TypeScript LSP 구현](typescript-lsp-implementation.md) | 프로세스 분리, 진단 대기, 실행 제한, 매니페스트 호환성 |
 | [Python LSP 설계와 검증](python-lsp.md) | 독립 번들·ty/환경 계약, 심볼·타입 정의·구현 탐색, 타입 진단·TS 공존 검증 |

@@ -481,6 +481,7 @@ test('Python code_actions_preview normal MCP distinguishes unavailable/incomplet
   const result=await call('variants');assert.ok(!result.isError,JSON.stringify(result));const previews=JSON.parse(result.content[0].text).result;
   assert.deepEqual(previews.map(p=>p.status),['edit_available','disabled','requires_resolve','requires_command','requires_command','unsupported_edit']);
   const audit=JSON.parse(await readFile(path.join(root,'preview-audit.json'),'utf8'));assert.deepEqual(audit.forbidden,[]);assert.equal(audit.applyEditResult.applied,false);
+  assert.equal(audit.clientInfo.version,JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
   assert.deepEqual(audit.context.only,['quickfix']);assert.equal(audit.context.diagnostics[0].code,'unresolved-reference');
   await assert.rejects(readFile(path.join(root,'new.py')),{code:'ENOENT'});
   assert.deepEqual(JSON.parse((await call('empty')).content[0].text).result,[]);

@@ -38,7 +38,7 @@ export class LspSession {
     this.child.on('exit', (code, signal) => this.fail(new Error(`ty server exited (${code ?? signal}): ${this.stderr ?? ''}`)));
     this.child.stdout.on('data', b => { try { this.consume(b); } catch (e) { this.fail(e); this.kill(); } });
     const initialized = await this.request('initialize', {
-      processId: process.pid, clientInfo: { name: 'codex-python-lsp', version: '0.1.1' },
+      processId: process.pid, clientInfo: { name: 'codex-python-lsp', version: '0.2.0' },
       rootUri: pathToFileURL(this.project.root).href,
       workspaceFolders: [{ uri: pathToFileURL(this.project.root).href, name: path.basename(this.project.root) }],
       capabilities: { general: { positionEncodings: ['utf-16'] }, workspace: { configuration: true, workspaceFolders: true },

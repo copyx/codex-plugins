@@ -228,10 +228,8 @@ async function appServer(options, env, work, installed, navigate = true) {
         const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: arguments_ });
         assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
         const output = JSON.parse(result.content[0].text);
-        if (options.useRuntimeConfig) {
-          assert.equal(output.server.configuration_source, 'user_config');
-          assert.equal(output.server.executable, options.ty);
-        }
+        assert.equal(output.server.configuration_source, options.useRuntimeConfig ? 'user_config' : 'environment');
+        assert.equal(output.server.executable, options.ty);
         const data = output.result;
         if (tool === 'definition') assert.equal((data[0].range ?? data[0].targetSelectionRange).start.line, 0);
         if (tool === 'references') assert.ok(data.length >= 2);
@@ -321,6 +319,7 @@ async function appServer(options, env, work, installed, navigate = true) {
       const response = await pythonCall('code_action_apply', { ...args, selection_id: selected.selection_id }); assert.ok(!response.isError, response.content?.[0]?.text);
       const result = JSON.parse(response.content[0].text).result;
       assert.equal(result.status, 'applied'); assert.equal(result.diagnostics_status, 'received'); assert.equal(result.files.length, 1);
+      assert.equal(result.diagnostics_server.executable, options.ty); assert.match(result.diagnostics_server.version, /^ty 0\.0\.109(?:\s|$)/);
       assert.ok(result.diagnostics.every(d => d.status === 'received' && d.omitted_diagnostics === 0 && !d.diagnostics.some(e => e.code === 'unresolved-reference')));
       const changed = await readFile(path.join(work, args.file), 'utf8'); assert.match(changed, /from utils import square/); assert.ok(!changed.includes('ignore'));
       assert.equal((await pythonCall('code_action_apply', { ...args, selection_id: selected.selection_id })).isError, true);
@@ -338,6 +337,7 @@ async function appServer(options, env, work, installed, navigate = true) {
       const renameResponse = await pythonCall('rename_apply', { ...renameArguments, selection_id: renameSelected.selection_id }); assert.ok(!renameResponse.isError, renameResponse.content?.[0]?.text);
       const renamed = JSON.parse(renameResponse.content[0].text).result;
       assert.equal(renamed.status, 'applied'); assert.equal(renamed.files.length, 2); assert.equal(renamed.diagnostics_status, 'received'); assert.equal(renamed.diagnostics.length, 2);
+      assert.equal(renamed.diagnostics_server.executable, options.ty); assert.match(renamed.diagnostics_server.version, /^ty 0\.0\.109(?:\s|$)/);
       assert.ok(renamed.diagnostics.every(d => d.status === 'received' && d.omitted_diagnostics === 0 && d.diagnostics.length === 0));
       assert.equal(await readFile(path.join(work, 'rename_model.py'), 'utf8'), 'class RenamedGreeter:\n    pass\n');
       assert.equal(await readFile(path.join(work, 'rename-use.py'), 'utf8'), 'from rename_model import RenamedGreeter\nitem = RenamedGreeter()\n# no symbol\n');

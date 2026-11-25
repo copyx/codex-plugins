@@ -57,7 +57,7 @@ const tools = Object.keys(methods).map(name => ({
 }));
 let active;
 async function dispatch(message) {
-  if (message.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'python-lsp', version: '0.1.1' } };
+  if (message.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'python-lsp', version: '0.2.0' } };
   if (message.method === 'ping') return {};
   if (message.method === 'resources/list') return { resources: [] };
   if (message.method === 'resources/templates/list') return { resourceTemplates: [] };

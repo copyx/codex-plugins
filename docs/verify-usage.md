@@ -19,7 +19,7 @@ TEST_TYPESCRIPT_DIR=/absolute/path/to/node_modules/typescript \
 TEST_MODEL_CATALOG=/absolute/path/to/models_cache.json npm run verify:installed
 ```
 
-- `verify`: 정적 검사 → 전체 테스트(건너뜀 0개 필수) → 새 임시 `CODEX_HOME`에서
+- `verify`: 정적 검사 → TS 전체 테스트(건너뜀 0개 필수) → 새 임시 `CODEX_HOME`에서
   카탈로그 탐색·설치 → 실제 app-server 읽기/미리보기 9개·적용 2개 → 실제 오류/수정 패치와
   다음 모델 요청의 진단을 검증합니다. 전제 조건이나 검사 결과가 빠지면 종료 코드 1입니다.
 - `verify:installed`: `CODEX_HOME` 또는 기본 사용자 Codex 홈의 **실제 설치본**을
@@ -49,9 +49,13 @@ TEST_MODEL_CATALOG=/absolute/path/to/models_cache.json npm run verify:installed
 TypeScript 경로가 없으면 실제 LSP 테스트를 건너뛰므로 전체 검증에는 `verify`를 사용하세요.
 `npm run test:codex`는 공통 검증기를 사용하는 격리 통합 검사만 실행합니다.
 
-Python 검증은 `TEST_TY_BIN`, `TEST_PYTHON_ENV`를 추가하고 `npm run verify:python`을
-실행합니다. 기존 `verify`는 Python 준비 없이 TS 회귀를 계속 검사합니다.
-두 언어 혼합 패치와 정상 신뢰 프로필 검사는 [Python 검증 절차](python-lsp.md#재현-명령)에 있습니다.
+Python 0.2.0 후보 검증은 `TEST_TY_BIN`, `TEST_PYTHON_ENV`를 추가하고 `npm run verify:python`을 실행합니다.
+Python 정확히 11개(읽기 9·쓰기 2)와 실제 두 적용/후속 진단·독립 cache·TS 11개·혼합 패치를 확인합니다.
+기존 `verify`는 Python 준비 없이 TS 회귀를 계속 검사합니다.
+`TEST_PYTHON_RUNTIME_CONFIG=1`은 임시 Node HOME의 기존 형식 JSON을 사용하고 PYTHON_LSP_TY를 전달하지 않습니다.
+`TEST_CODEX_PROFILE`로 정상 검토한 별도 임시 profile을 지정해 `npm run verify:python:trusted`를 실행하면
+두 훅의 trusted 상태를 요구하고 우회 옵션 없이 동일 검사를 수행합니다. 현재 사용자 profile은 허용하지 않습니다.
+재현 절차는 [Python 검증](python-lsp.md#재현-명령), 최신 결과와 한계는 [0.2.0 후보 기록](python-lsp-release-0.2.0.md)에 있습니다.
 
 ## 0.2.0 회귀 범위
 
@@ -60,6 +64,7 @@ Python 검증은 `TEST_TY_BIN`, `TEST_PYTHON_ENV`를 추가하고 `npm run verif
 적용 검사는 UTF-16/CRLF·버전·URI·겹침·해시·권한·symlink/하드 링크 및 실제 파일 교체 실패를
 주입해 원본 복구와 별도 변경 보존을 확인합니다. 적용 도구의 후속 진단은 훅과 별도로 검사합니다.
 일부 상태(지원 밖 명령·지연 데이터·리소스 작업)는 계약 테스트이며 모든 실제 서버 refactor를 실행한 것은 아닙니다.
+TS의 감사된 빈 command wrapper 조건은 TS 전용입니다. Python 적용은 서버 명령을 모두 거부합니다.
 
 ## 수동으로 설치 경로를 분리해 확인하기
 
