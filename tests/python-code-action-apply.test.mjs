@@ -18,10 +18,10 @@ async function mcp(root, requests, command = process.env.TEST_TY_BIN) {
   } finally { clearTimeout(timer); child.kill(); }
 }
 const value = result => { assert.ok(!result.isError, result.content?.[0]?.text); return JSON.parse(result.content[0].text); };
-test('Python MCP advertises exactly nine read tools and one strict selected quickfix write tool', async () => {
+test('Python MCP preserves strict selected quickfix schema alongside nine read tools and two write tools', async () => {
   const [listed] = await mcp(tmpdir(), [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }]);
   const tool = listed.tools.find(t => t.name === 'code_action_apply'); assert.ok(tool, 'selected quickfix application must be advertised');
-  assert.equal(listed.tools.length, 10); assert.equal(listed.tools.filter(t => t.annotations.readOnlyHint).length, 9);
+  assert.equal(listed.tools.length, 11); assert.equal(listed.tools.filter(t => t.annotations.readOnlyHint).length, 9); assert.equal(listed.tools.filter(t => !t.annotations.readOnlyHint).length, 2);
   assert.equal(tool.annotations.readOnlyHint, false); assert.equal(tool.annotations.destructiveHint, true); assert.equal(tool.annotations.idempotentHint, false);
   assert.deepEqual(tool.inputSchema.required, ['workspace_root','file','range','selection_id']); assert.equal(tool.inputSchema.additionalProperties, false);
   assert.deepEqual(Object.keys(tool.inputSchema.properties), ['workspace_root','file','range','selection_id']);

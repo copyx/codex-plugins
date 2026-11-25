@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists nine read tools and one write tool; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists nine read tools and two write tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,9 +81,10 @@ test('Python actual MCP lists nine read tools and one write tool; Unicode CRLF a
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview', 'rename_preview', 'code_action_apply']);
-  assert.ok(output[1].result.tools.filter(t => t.name !== 'code_action_apply').every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition', 'implementation', 'code_actions_preview', 'rename_preview', 'code_action_apply', 'rename_apply']);
+  assert.ok(output[1].result.tools.filter(t => !['code_action_apply','rename_apply'].includes(t.name)).every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   assert.equal(output[1].result.tools.find(t => t.name === 'code_action_apply').annotations.readOnlyHint, false);
+  assert.equal(output[1].result.tools.find(t => t.name === 'rename_apply').annotations.readOnlyHint, false);
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
   const hover = JSON.parse(output.find(r => r.id === 5).result.content[0].text).result;

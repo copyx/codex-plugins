@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { resolveProject } from '../plugins/python-lsp/lib/project.mjs';
 import { codeActionsPreview } from '../plugins/python-lsp/lib/preview.mjs';
-import { applyCodeAction, postApplyDiagnostics } from '../plugins/python-lsp/lib/operations.mjs';
+import { applyCodeAction, applyRename, postApplyDiagnostics } from '../plugins/python-lsp/lib/operations.mjs';
+import { renamePreview } from '../plugins/python-lsp/lib/rename.mjs';
 
 async function fixture(t) {
   const root=await fs.realpath(await fs.mkdtemp(path.join(tmpdir(),'python-operations-'))); t.after(()=>fs.rm(root,{recursive:true,force:true}));
@@ -49,4 +50,24 @@ test('Python post-apply diagnostics preserve applied status when a source become
   const session={command:f.session.command,close:async()=>{await fs.unlink(f.file);await fs.symlink(outside,f.file);},kill:()=>{}};
   const result=await postApplyDiagnostics(f.project,session,{status:'applied',files:[{file:f.file,after_sha256:'sha256:fixture'}],recovery:[]});
   assert.equal(result.status,'applied');assert.equal(result.diagnostics_status,'incomplete');assert.match(result.diagnostics_error,/outside/);assert.equal(await fs.readFile(outside,'utf8'),'OUTSIDE');
+});
+async function renameFixture(t) {
+  const f=await fixture(t),text='old = 1\n',uri=pathToFileURL(f.file).href,range={start:{line:0,character:0},end:{line:0,character:3}};
+  await fs.writeFile(f.file,text);await fs.writeFile(f.other,'old = 2\n');f.session.documents.set(uri,{version:1,text});f.session.capabilities.renameProvider={prepareProvider:true};
+  f.session.sync=async()=>uri;f.session.position=()=>({line:0,character:1});
+  f.session.request=async(method,params)=>method==='textDocument/prepareRename'?range:{changes:{[uri]:[{range,newText:params.newName}],[pathToFileURL(f.other).href]:[{range,newText:params.newName}]}};
+  f.args={workspace_root:f.root,file:f.file,line:1,character:2,new_name:'renamed'};return f;
+}
+test('Python rename operation preserves rolled_back and does not start post-apply diagnostics',async t=>{
+  const f=await renameFixture(t),shown=await renamePreview(f.project,f.session,f.args);let commits=0;
+  const io={...fs,rename:async(from,to)=>{if(from.endsWith('.next')&&++commits===2)throw new Error('rename second-file failure');return fs.rename(from,to);}};
+  const output=await applyRename(f.project,f.session,{...f.args,selection_id:shown.result.selection_id},{io});
+  assert.equal(output.result.status,'rolled_back',JSON.stringify(output));assert.equal(output.result.diagnostics_status,'not_run');assert.equal(output.result.selection_id,shown.result.selection_id);assert.equal(f.closed(),0);assert.equal(await fs.readFile(f.file,'utf8'),'old = 1\n');assert.equal(await fs.readFile(f.other,'utf8'),'old = 2\n');
+});
+test('Python rename operation preserves recovery_incomplete and separate edits with verified backup evidence',async t=>{
+  const f=await renameFixture(t),shown=await renamePreview(f.project,f.session,f.args);let commits=0;
+  const io={...fs,rename:async(from,to)=>{if(from.endsWith('.next')&&++commits===2){await fs.writeFile(f.file,'# separate user edit\n');throw new Error('rename failure with concurrent edit');}return fs.rename(from,to);}};
+  const output=await applyRename(f.project,f.session,{...f.args,selection_id:shown.result.selection_id},{io}),result=output.result;
+  assert.equal(result.status,'recovery_incomplete',JSON.stringify(output));assert.equal(result.diagnostics_status,'not_run');assert.equal(f.closed(),0);assert.equal(await fs.readFile(f.file,'utf8'),'# separate user edit\n');assert.equal(await fs.readFile(f.other,'utf8'),'old = 2\n');
+  assert.equal(result.recovery[0].backup_verified,true);assert.equal(await fs.readFile(result.recovery[0].backup_path,'utf8'),'old = 1\n');assert.ok(result.retained_artifacts.includes(result.recovery[0].backup_path));
 });

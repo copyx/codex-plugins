@@ -80,7 +80,7 @@ buildPreview는 basis.tool과 request를 ID에 묶고 서버 action/edit에서 s
 호출자는 build 후 basis와 후보의 targets를 assertBasisCurrent로 재검증해야 한다.
 이름 변경은 별도 lib/rename.mjs가 아래 정책으로 이 표면을 사용한다.
 기존 파일 텍스트 적용은 [#75 내부 엔진](python-lsp-apply.md)에 분리했다.
-사용자 quickfix 쓰기 MCP·후속 진단은 #76에서 분리했다. 이름 변경 적용은 후속 항목이며,
+사용자 quickfix 쓰기 MCP·후속 진단은 #76, 이름 변경 적용은 [#77](python-lsp-apply.md#선택-이름-변경-적용--orca-77)에서 분리했다.
 서버 명령 실행과 resolve 이후 새 편집 수용은 현재 지원하지 않는다.
 
 ## 이름 변경 — Orca #74

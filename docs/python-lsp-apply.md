@@ -1,7 +1,7 @@
-# Python 텍스트 적용 계약 — Orca #75·#76
+# Python 텍스트 적용 계약 — Orca #75·#76·#77
 
 `plugins/python-lsp/lib/apply.mjs`는 #73·#74 미리보기의 기존 파일 텍스트 편집을 적용하는 **내부 모듈**이다.
-#75는 외부 쓰기 도구를 추가하지 않았다. #76의 현재 MCP는 읽기 9개·선택 quickfix 쓰기 1개이며 이름 변경 적용은 #77에 남긴다.
+#75는 외부 쓰기 도구를 추가하지 않았다. #76·#77의 현재 MCP는 읽기 9개·선택 quickfix/rename 쓰기 2개다.
 TS 적용의 검증·staging·파일별 교체·복구 패턴을 참고했지만 Python 번들 밖의 코드를 import하지 않는다.
 추가 의존성·패키지 설치·서버 명령 실행·preview 저장은 없다.
 
@@ -41,7 +41,7 @@ options는 내부 엔진 I/O 실패 주입용이며 MCP 입력이 아니다. 선
 엔진 rejected/rolled_back/recovery_incomplete는 구조화한 결과를 보존하면서 MCP isError=true로 표시하고,
 오래된 선택/잘못된 입력 등 사전 실패는 기존 오류 응답을 사용한다.
 
-postApplyDiagnostics(project,session,result)는 #77에서도 재사용할 수 있다.
+postApplyDiagnostics(project,session,result)는 #77에서도 같은 계약으로 재사용한다.
 applied에만 원래 세션을 닫고 같은 선택 ty 절대 실행 경로로 별도 새 세션을 시작한다.
 project/config/environment와 대상 경계를 다시 확인하고 새 publishDiagnostics를 기다린다.
 결과를 applied_snapshot_in_new_session으로 표시하기 전 읽기 중 파일 identity/metadata가 안정적인지 확인하고,
@@ -61,6 +61,26 @@ diagnostics_server에 실제 새 ty 버전/경로를 담는다. 이 메타데이
 억제 후보와 utils/무관 파일은 자동으로 적용·변경하지 않았다. 중복 호출·변조/오래된 선택은 거부됐다.
 명령/지연/비활성/리소스/annotation/외부·중복 후보, 진단 startup/timeout/출력 생략과 별도 source 변경은
 통제 stdio fixture 증거다. 적용 롤백·진단 cleanup 오류는 내부 I/O/API 실패 주입 증거로 구분한다.
+
+## 선택 이름 변경 적용 — Orca #77
+
+`rename_apply(workspace_root,file,line,character,new_name,selection_id)`는 원래 1-based UTF-16 위치와 새 이름/선택만 받는다.
+raw edit/basis/command·range/복수 선택을 거부하며 미리보기의 Python 이름 정책을 입력 단계부터 유지한다.
+새 세션의 renamePreview가 확인한 capability/prepare 결과·canonical 요청·환경/서버·target preimage와
+제안 편집에 묶인 ID가 같아야 한다. not_renamable/no_changes, 없는/오래된 ID와 unsupported_edit는 적용하지 않는다.
+
+lib/operations.mjs의 applyRename(project,session,args,options={})가 새 미리보기를 재조회한다.
+일치하는 edit_available 후보만 수정 없이 #75 applyPreview에 보내고 #76 postApplyDiagnostics로 결과를 분리한다.
+applied/rolled_back/recovery_incomplete·selection_id·복구/백업 증거를 보존한다.
+미적용 결과는 not_run이며 적용 후 서버 오류/별도 파일 변경은 applied+incomplete다.
+후속 진단 출력 한도와 오류 메시지 생략 정책도 #76과 같다.
+
+실제 ty 0.0.109의 두 파일에서 선언·import·참조가 바뀌고 CRLF/앞선 이모지 좌표와 무관한 동명 class/다른 파일이 유지됐다.
+원래 대상 변경·변조 요청·중복 적용은 무쓰기 거부됐다. 실제 ty 편집 형식은 changes였다.
+documentChanges 성공, capability/prepare 변경·오류/잘못된 응답·외부/리소스/annotation·hardlink 거부 및 post 오류는
+통제 stdio fixture, 다중 파일 rollback/복구 충돌은 내부 I/O 실패 주입 증거다.
+서버 workspace/applyEdit는 계속 거부하며 executeCommand/resolve·파일 생성/이동/삭제를 실행하지 않는다.
+이름 변경 preview 자체의 null/빈/상태와 이름 검증 계약은 바꾸지 않았다.
 
 ## 쓰기 전 정책
 

@@ -1,21 +1,29 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 if (process.argv.includes('--version')) { console.log('ty 0.0.109'); process.exit(0); }
 const mode = readFileSync(path.join(process.cwd(), 'rename-mode'), 'utf8');
+const source = path.join(process.cwd(), 'rename-source.py'), after = readFileSync(source, 'utf8').startsWith('renamed');
+const event = value => appendFileSync(path.join(process.cwd(), 'rename-events.jsonl'), JSON.stringify({ phase: after ? 'post' : 'pre', ...value })+'\n');
 const audit = { mode, methods: [], forbidden: [], applyEditResult: null }, file = path.join(process.cwd(), 'rename-audit.json');
 const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
 let buffer = Buffer.alloc(0), uri;
 function send(message) { const body = JSON.stringify(message); process.stdout.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`); }
 function save() { writeFileSync(file, JSON.stringify(audit)); }
 function handle(message) {
-  if (message.method) audit.methods.push(message.method);
-  if (message.id === 'server-edit') audit.applyEditResult = message.result;
-  if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {
+  if (message.method) { audit.methods.push(message.method); event({ method: message.method }); }
+  if (message.id === 'server-edit') { audit.applyEditResult = message.result; event({ applyEditResult: message.result }); }
+  if (message.method === 'initialize') {
+    if (after && mode === 'post-error') send({ jsonrpc:'2.0', id:message.id, error:{code:-32603,message:'rename post-apply startup failure'} });
+    else send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {
     definitionProvider: true, referencesProvider: true, hoverProvider: true,
     renameProvider: mode === 'unsupported' ? false : mode === 'no-prepare' ? true : { prepareProvider: true },
   } } });
-  else if (message.method === 'textDocument/didOpen') uri = message.params.textDocument.uri;
+  } else if (message.method === 'textDocument/didOpen') {
+    uri = message.params.textDocument.uri;
+    send({jsonrpc:'2.0',method:'textDocument/publishDiagnostics',params:{uri,version:message.params.textDocument.version,diagnostics:[]}});
+    if (after && mode === 'post-change') appendFileSync(source,'# separate edit during diagnostics\n');
+  }
   else if (message.method === 'textDocument/prepareRename') {
     if (mode === 'prepare-error') send({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'prepare fixture failure' } });
     else send({ jsonrpc: '2.0', id: message.id, result: mode === 'no-symbol' ? null : mode === 'bad-prepare' ? { invalid: true } : mode === 'default' ? { defaultBehavior: true } : mode === 'false-default' ? { defaultBehavior: false } : mode === 'range' ? range : { range, placeholder: 'old' } });
@@ -28,6 +36,7 @@ function handle(message) {
         : mode === 'command' ? { ...edit, command: 'unsafe.command' }
         : mode === 'document' ? { documentChanges: [{ textDocument: { uri, version: 1 }, edits: [{ range, newText: message.params.newName }] }] }
         : mode === 'external' ? { changes: { 'file:///outside/secret.py': [{ range, newText: message.params.newName }] } }
+        : mode === 'annotation' ? { changes: { [uri]: [{ range, newText: message.params.newName, annotationId: 'a' }] }, changeAnnotations: { a: { label: 'review', needsConfirmation: true } } }
         : mode === 'resource' ? { documentChanges: [{ kind: 'rename', oldUri: uri, newUri: new URL('renamed.py', uri).href }] } : edit;
       send({ jsonrpc: '2.0', id: message.id, result });
     }

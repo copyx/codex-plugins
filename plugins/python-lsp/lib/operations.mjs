@@ -6,6 +6,7 @@ import { resolveProject } from './project.mjs';
 import { LspSession } from './lsp.mjs';
 import { codeActionsPreview, fingerprint } from './preview.mjs';
 import { applyPreview } from './apply.mjs';
+import { renamePreview } from './rename.mjs';
 
 function requireValue(value, message) { if (!value) throw new Error(message); }
 const selection = /^sha256:[a-f0-9]{64}$/;
@@ -76,6 +77,17 @@ export async function applyCodeAction(project, session, args, options = {}) {
   requireValue(matches.length === 1, 'Selected preview is stale or unavailable; request a new selection');
   const selected = matches[0];
   requireValue(selected.status === 'edit_available' && !selected.command && !selected.needs_resolve && selected.disabled_reason === null, 'Selected candidate is not a standalone immediate edit; command/resolve/disabled selections are unsupported');
+  const applied = await applyPreview(project, session, selected, options);
+  const result = await postApplyDiagnostics(project, session, { ...applied, selection_id: args.selection_id });
+  return { workspace_root: shown.workspace_root, project_root: shown.project_root, config: shown.config, environment: shown.environment, server: shown.server, result };
+}
+export async function applyRename(project, session, args, options = {}) {
+  requireValue(typeof args.selection_id === 'string' && selection.test(args.selection_id), 'selection_id must be a preview sha256 ID');
+  const shown = await renamePreview(project, session, args);
+  requireValue(shown.status === 'preview_available' && shown.result, `Rename has no applicable preview (${shown.status}): ${shown.reason ?? 'request a new selection'}`);
+  const selected = shown.result;
+  requireValue(selected.selection_id === args.selection_id, 'Selected rename preview is stale or unavailable; request a new selection');
+  requireValue(selected.status === 'edit_available' && !selected.command && !selected.needs_resolve && selected.disabled_reason === null, 'Selected rename is not a standalone immediate edit');
   const applied = await applyPreview(project, session, selected, options);
   const result = await postApplyDiagnostics(project, session, { ...applied, selection_id: args.selection_id });
   return { workspace_root: shown.workspace_root, project_root: shown.project_root, config: shown.config, environment: shown.environment, server: shown.server, result };

@@ -3,14 +3,16 @@ import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 import { codeActionsPreview } from './lib/preview.mjs';
 import { renamePreview, validatePythonName } from './lib/rename.mjs';
-import { applyCodeAction } from './lib/operations.mjs';
+import { applyCodeAction, applyRename } from './lib/operations.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction', rename_preview: 'textDocument/rename', code_action_apply: 'textDocument/codeAction' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation', code_actions_preview: 'textDocument/codeAction', rename_preview: 'textDocument/rename', code_action_apply: 'textDocument/codeAction', rename_apply: 'textDocument/rename' };
+const writeTools = ['code_action_apply', 'rename_apply'];
 const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
 const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
 const pointSchema = { type: 'object', additionalProperties: false, properties: positionFields, required: ['line', 'character'] };
 const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } }, code_actions_preview: { range: { type: 'object', additionalProperties: false, properties: { start: pointSchema, end: pointSchema }, required: ['start', 'end'] } }, rename_preview: { ...positionFields, new_name: { type: 'string', minLength: 1, maxLength: 256 } } };
 parameters.code_action_apply = { ...parameters.code_actions_preview, selection_id: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', minLength: 71, maxLength: 71 } };
+parameters.rename_apply = { ...parameters.rename_preview, selection_id: parameters.code_action_apply.selection_id };
 function toolResult(output) {
   const text = JSON.stringify(output);
   if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('MCP result exceeds 1 MiB; narrow the request');
@@ -47,8 +49,10 @@ const tools = Object.keys(methods).map(name => ({
       ? 'Preview Python rename edits at a 1-based UTF-16 position and new_name. Uses advertised prepareRename, NFKC-stable Unicode XID name validation and a conservative reserved-name policy. Returns original file changes and context-bound selection IDs. Never writes files or executes commands.'
     : name === 'code_action_apply'
       ? 'Apply exactly the explicitly selected quickfix preview to existing local Python files. Provide the original workspace_root, file, 1-based UTF-16 range and selection_id only. Requeries fresh diagnostics and candidates; rejects stale, command, deferred, disabled and unsupported edits. Writes files; returns application outcome separately from new-session post-apply diagnostics. Never auto-selects or executes server commands.'
+    : name === 'rename_apply'
+      ? 'Apply exactly the selected rename preview to existing local Python files. Provide the original workspace_root, file, 1-based UTF-16 line/character, new_name and selection_id only. Revalidates Python name/prepareRename and regenerates the preview in a new session. Rejects changed or unsupported selections. Writes files and returns application/recovery outcome separately from fresh post-apply diagnostics. No client edits or server commands.'
     : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
-  annotations: { readOnlyHint: name !== 'code_action_apply', destructiveHint: name === 'code_action_apply', ...(name === 'code_action_apply' ? { idempotentHint: false } : {}), openWorldHint: false },
+  annotations: { readOnlyHint: !writeTools.includes(name), destructiveHint: writeTools.includes(name), ...(writeTools.includes(name) ? { idempotentHint: false } : {}), openWorldHint: false },
   inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(parameters[name] ?? positionFields) }, required: ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)] },
 }));
 let active;
@@ -71,13 +75,13 @@ async function dispatch(message) {
     if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
     if (!documentSymbols && !projectSymbols && !quickfixPreview && !quickfixApply && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
     if (projectSymbols && (typeof args.query !== 'string' || !args.query.trim())) throw new Error('Expected a non-blank string query');
-    if (name === 'rename_preview') validatePythonName(args.new_name);
-    if (quickfixApply && (typeof args.selection_id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(args.selection_id))) throw new Error('selection_id must be a preview sha256 ID');
+    if (name === 'rename_preview' || name === 'rename_apply') validatePythonName(args.new_name);
+    if (writeTools.includes(name) && (typeof args.selection_id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(args.selection_id))) throw new Error('selection_id must be a preview sha256 ID');
     const project = await resolveProject(args.file, args.workspace_root);
     active = new LspSession(project); await active.start();
     if (quickfixPreview) return toolResult(await codeActionsPreview(project, active, args));
-    if (quickfixApply) {
-      const output = await applyCodeAction(project, active, args);
+    if (writeTools.includes(name)) {
+      const output = name === 'code_action_apply' ? await applyCodeAction(project, active, args) : await applyRename(project, active, args);
       return { ...toolResult(output), ...(output.result.status === 'applied' ? {} : { isError: true }) };
     }
     if (name === 'rename_preview') return toolResult(await renamePreview(project, active, args));
