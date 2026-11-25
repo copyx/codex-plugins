@@ -62,7 +62,7 @@ test('Python ty.toml wins over pyproject rules and both config forms apply', rea
   await s.start(); const results = await s.diagnostics([path.join(root, 'main.py')]);
   assert.equal(results[0].status, 'received'); assert.deepEqual(results[0].diagnostics, []);
 });
-test('Python actual MCP lists five read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
+test('Python actual MCP lists six read-only tools; Unicode CRLF and .pyi calls work from standalone cache', real, async t => {
   const root = await fixture(t), bundle = path.join(root, 'cache/python-lsp');
   await cp(plugin, bundle, { recursive: true });
   const line = 'emoji = "😀"; value = greet("hi")';
@@ -81,7 +81,7 @@ test('Python actual MCP lists five read-only tools; Unicode CRLF and .pyi calls 
     message(12, 'hover', { ...args, extra: true }) ];
   const output = (await entry(root, 'server.mjs', requests.map(JSON.stringify).join('\n') + '\n', bundle)).trim().split('\n').map(JSON.parse);
   assert.equal(output[0].result.serverInfo.version, JSON.parse(await readFile(path.join(plugin,'.codex-plugin/plugin.json'),'utf8')).version);
-  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols']);
+  assert.deepEqual(output[1].result.tools.map(t => t.name), ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition']);
   assert.ok(output[1].result.tools.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
   for (const id of [3,4,5,6,7,8]) assert.ok(!output.find(r => r.id === id).result.isError, JSON.stringify(output.find(r => r.id === id)));
   assert.match(JSON.stringify(output.find(r => r.id === 3).result), /src\/lib.py/);
@@ -294,7 +294,16 @@ process.stdin.on('data', chunk => {
     const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length));
     buffer = buffer.subarray(end + 4 + length);
     if (message.method === 'initialize') {
-      send({ jsonrpc:'2.0', id:message.id, result:{ capabilities:{ definitionProvider:true, referencesProvider:true, hoverProvider:true, documentSymbolProvider:mode !== 'unsupported', workspaceSymbolProvider:mode !== 'unsupported' } } });
+      send({ jsonrpc:'2.0', id:message.id, result:{ capabilities:{ definitionProvider:true, referencesProvider:true, hoverProvider:true, documentSymbolProvider:mode !== 'unsupported', workspaceSymbolProvider:mode !== 'unsupported', typeDefinitionProvider:mode !== 'unsupported' } } });
+    } else if (message.method === 'textDocument/typeDefinition') {
+      if (mode === 'error') send({ jsonrpc:'2.0', id:message.id, error:{ code:-32601, message:'typeDefinition unavailable' } });
+      else {
+        const range = { start:{line:0,character:0}, end:{line:0,character:4} };
+        const location = { uri:'file:///outside/type.pyi', range };
+        const link = { originSelectionRange:range, targetUri:'file:///outside/type.pyi', targetRange:range, targetSelectionRange:range };
+        const result = mode === 'location' ? location : mode === 'locations' ? [location] : mode === 'links' ? [link] : mode === 'null' ? null : mode === 'single-link' ? link : mode === 'mixed' ? [location,link] : mode === 'bad-range' ? { ...location, range:{ start:{line:-1,character:0}, end:{line:0,character:1} } } : mode === 'invalid-array' ? [{}] : { unexpected:true };
+        send({ jsonrpc:'2.0', id:message.id, result });
+      }
     } else if (message.method === 'textDocument/documentSymbol' || message.method === 'workspace/symbol') {
       if (mode === 'error') send({ jsonrpc:'2.0', id:message.id, error:{ code:-32601, message:'documentSymbol unavailable' } });
       else {
@@ -309,7 +318,7 @@ process.stdin.on('data', chunk => {
   await writeFile(command,fake);await chmod(command,0o755);
   if(!pythonEnv){await mkdir(path.join(root,'.venv/bin'),{recursive:true});await writeFile(path.join(root,'.venv/pyvenv.cfg'),'version = 3.15.2');await symlink(process.execPath,path.join(root,'.venv/bin/python'));}
   const call=async(mode,name='document_symbols')=>{
-    const request=JSON.stringify(message(1,name,{workspace_root:root,file:'main.py',...(name==='project_symbols'?{query:'FlatSymbol'}:{})}))+'\n';
+    const request=JSON.stringify(message(1,name,{workspace_root:root,file:'main.py',...(name==='project_symbols'?{query:'FlatSymbol'}:name==='type_definition'?{line:1,character:2}:{})}))+'\n';
     await writeFile(command,fake.replace('FIXTURE_SYMBOL_MODE',JSON.stringify(mode)));return JSON.parse((await entry(root,'server.mjs',request,plugin,{PYTHON_LSP_TY:command})).trim()).result;
   };
   const flat=await call('flat');assert.ok(!flat.isError,JSON.stringify(flat));
@@ -322,6 +331,16 @@ process.stdin.on('data', chunk => {
   assert.deepEqual(JSON.parse(project.content[0].text).result,[{name:'FlatSymbol',kind:12,containerName:'module',location:{uri:'file:///outside/library.py',range:{start:{line:0,character:0},end:{line:0,character:1}}},deprecated:false,workspace_boundary:'outside'}]);
   assert.deepEqual(JSON.parse((await call('null','project_symbols')).content[0].text).result,[]);
   for(const mode of ['unsupported','error','invalid']){const r=await call(mode,'project_symbols');assert.equal(r.isError,true);assert.match(r.content[0].text,/workspace\/symbol|-32601/);}
+  const range={start:{line:0,character:0},end:{line:0,character:4}};
+  const location={uri:'file:///outside/type.pyi',range,workspace_boundary:'outside'};
+  for(const mode of ['location','locations','links','null']) {
+    const r=await call(mode,'type_definition');assert.ok(!r.isError,JSON.stringify(r));const result=JSON.parse(r.content[0].text).result;
+    const expected=mode==='location'?location:mode==='locations'?[location]:mode==='links'?[{originSelectionRange:range,targetUri:'file:///outside/type.pyi',targetRange:range,targetSelectionRange:range,workspace_boundary:'outside'}]:[];
+    assert.deepEqual(result,expected);
+  }
+  for(const mode of ['unsupported','error','invalid','invalid-array','bad-range','single-link','mixed']) {
+    const r=await call(mode,'type_definition');assert.equal(r.isError,true,mode);assert.match(r.content[0].text,/typeDefinition|-32601/);
+  }
 });
 test('Python project_symbols finds unopened files in the selected project and separates sibling settings', real, async t => {
   const root=await fixture(t);
@@ -364,4 +383,35 @@ test('Python project_symbols distinguishes import roots, excluded files and the 
   assert.ok(value(3).result.some(s=>s.name==='LocalIncluded'));assert.deepEqual(value(4).result,[]);
   assert.equal(value(5).search_scope.project_root,root);
   assert.ok(value(5).result.some(s=>s.name==='ImportedSibling'&&s.location.uri.endsWith('/b/remote.py')),'the parent-selected project can include the sibling');
+});
+test('Python type_definition distinguishes variable definition and py/pyi type declarations with UTF-16 input', real, async t => {
+  const root=await fixture(t);
+  await writeFile(path.join(root,'src/models.py'),'class Person:\n    pass\n');
+  await writeFile(path.join(root,'src/typed_api.pyi'),'class StubPerson:\n    ...\n');
+  await writeFile(path.join(root,'typed_ref.pyi'),'from typed_api import StubPerson\nrecord: StubPerson\n');
+  const lines=['from models import Person','from typed_api import StubPerson','person: Person = Person()','stub: StubPerson = StubPerson()','emoji = "😀"; use_person = person','use_stub = stub','# no type'];
+  const source=lines.join('\r\n')+'\r\n';await writeFile(path.join(root,'typed.py'),source);
+  await writeFile(path.join(root,'no_type.py'),'# No type here\n');await writeFile(path.join(root,'unknown.py'),'unknown_value\n');await symlink('/etc/hosts',path.join(root,'escape.py'));
+  const args={workspace_root:root,file:'typed.py',line:5,character:lines[4].lastIndexOf('person')+2};
+  const requests=[{jsonrpc:'2.0',id:1,method:'tools/list'},message(2,'definition',args),message(3,'type_definition',args),message(4,'type_definition',{...args,line:6,character:lines[5].lastIndexOf('stub')+2}),message(5,'type_definition',{...args,file:'typed_ref.pyi',line:2,character:2}),message(6,'type_definition',{...args,file:'no_type.py',line:1,character:2}),message(7,'type_definition',{...args,line:7,character:1}),message(8,'type_definition',{...args,file:'../outside.py'}),message(9,'type_definition',{...args,file:'escape.py'}),message(10,'type_definition',{workspace_root:root,file:'typed.py'}),message(11,'type_definition',{...args,query:'Person'}),message(12,'type_definition',{...args,file:'unknown.py',line:1,character:2})];
+  const responses=(await entry(root,'server.mjs',requests.map(JSON.stringify).join('\n')+'\n')).trim().split('\n').map(JSON.parse);
+  const tool=responses[0].result.tools.find(t=>t.name==='type_definition');assert.ok(tool,'type_definition must be advertised');
+  assert.deepEqual(tool.inputSchema.required,['workspace_root','file','line','character']);assert.equal(tool.annotations.readOnlyHint,true);assert.equal(tool.annotations.destructiveHint,false);
+  const value=id=>{const r=responses.find(r=>r.id===id).result;assert.ok(!r.isError,JSON.stringify(r));return JSON.parse(r.content[0].text).result;};
+  const one=result=>Array.isArray(result)?result[0]:result;
+  const definition=one(value(2)),type=one(value(3));
+  assert.match(definition.uri??definition.targetUri,/\/typed.py$/);assert.equal((definition.range??definition.targetSelectionRange).start.line,2);
+  assert.match(type.uri??type.targetUri,/\/src\/models.py$/);assert.equal((type.range??type.targetSelectionRange).start.line,0);assert.equal(type.workspace_boundary,'inside');
+  t.diagnostic(`Actual ty typeDefinition response: ${Array.isArray(value(3))?'array':'single'} ${type.targetUri?'LocationLink':'Location'}`);
+  for(const id of [4,5])assert.match(one(value(id)).uri??one(value(id)).targetUri,/typed_api.pyi$/);
+  assert.deepEqual(value(6),[]);assert.deepEqual(value(7),[]);
+  const unknown=value(12);
+  if(Array.isArray(unknown)&&unknown.length===0)t.diagnostic('Unresolved name: server returned no type');
+  else {const target=one(unknown);assert.match(target.uri??target.targetUri,/ty_extensions\/_internal.pyi$/);assert.equal(target.workspace_boundary,'outside');t.diagnostic('Unresolved name: preserved external ty Unknown stub type');}
+  for(const id of [8,9,10,11])assert.equal(responses.find(r=>r.id===id).result.isError,true);
+  const project=await resolveProject('typed.py',root,{env:{}}),session=new LspSession(project,{command:ty});t.after(()=>session.close());
+  await session.start();const uri=await session.sync(project.file);
+  const raw=await session.request('textDocument/typeDefinition',{textDocument:{uri},position:{line:args.line-1,character:args.character-1}});
+  const unmark=result=>Array.isArray(result)?result.map(({workspace_boundary,...location})=>location):(({workspace_boundary,...location})=>location)(result);
+  assert.deepEqual(unmark(value(3)),raw);assert.equal(await readFile(project.file,'utf8'),source);
 });

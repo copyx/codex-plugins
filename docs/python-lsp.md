@@ -50,6 +50,27 @@ workspaceSymbolProvider 미지원·LSP 오류·잘못된 응답 형식은 오류
 Python 5개·TS 11개 목록/호출과 혼합 패치 2회·모델 요청 3회·언어별 새 오류/정상 결과를 확인했다.
 정적 검사 53파일과 `git diff --check`도 통과했다.
 
+## 후속 타입 정의 — Orca #71
+
+`type_definition(workspace_root,file,line,character)`은 기존 위치 검증·프로젝트/환경 선택을 재사용해
+`textDocument/typeDefinition`을 호출한다. typeDefinitionProvider 미지원은 오류이며 client의
+typeDefinition.linkSupport=true를 명시한다. 위치 입력은 1-based UTF-16, 응답 범위는 0-based LSP다.
+[LSP 3.17 계약](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/language/typeDefinition.md)에
+따라 Location 단일/배열, LocationLink 배열, null을 검사하며 URI/정수 좌표/범위 형식도 확인한다.
+빈 정상은 `[]`, 비어 있지 않은 원형과 외부 위치 표시는 유지한다. 서버 오류/잘못된 형식을 빈 정상으로 숨기지 않는다.
+
+실제 ty 0.0.109는 이 client capability에서 LocationLink 배열을 반환했다.
+변수 definition은 사용 파일의 변수 선언을, type_definition은 별도 models.py 클래스 선언을 가리켰다.
+stub 타입의 .pyi 선언과 .pyi 입력도 확인했고, 주석처럼 타입 없는 위치는 `[]`였다.
+미해결 이름은 서버 상태에 따라 빈 결과나 외부 ty Unknown stub 위치를 반환할 수 있어 원래 결과를 보존한다.
+CRLF와 앞선 이모지를 포함한 UTF-16 입력, 경계 거부 및 기존 file-only/query 입력 회귀를 검사한다.
+Location 단일/배열 등 실제 ty에서 얻지 않은 형식과 미지원/오류/잘못된 응답은 통제된 stdio fixture 증거다.
+소스·사용자 설치·신뢰나 릴리스 버전은 변경하지 않는다. 버전 마감은 #78의 책임이다.
+
+2026-11-25 검증: Python 36개·기존 TS 49개, 실패/건너뜀 0.
+실제 격리 Codex에서 Python 6개·TS 11개 목록/호출, 혼합 패치 2회·모델 요청 3회와
+언어별 새 오류/정상 결과를 확인했다. 정적 53파일과 `git diff --check`도 통과했다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.

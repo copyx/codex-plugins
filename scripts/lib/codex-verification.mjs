@@ -213,10 +213,10 @@ async function appServer(options, env, work, installed, navigate = true) {
       const pythonServer = pythonInventory.data.find(s => s.name === 'python-lsp');
       const pythonManifest = JSON.parse(await readFile(path.join(repo, 'plugins/python-lsp/.codex-plugin/plugin.json'), 'utf8'));
       assert.equal(pythonServer?.serverInfo?.version, pythonManifest.version);
-      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'document_symbols', 'hover', 'project_symbols', 'references']);
-      for (const tool of ['definition', 'references', 'hover', 'document_symbols', 'project_symbols']) {
+      assert.deepEqual(Object.keys(pythonServer.tools).sort(), ['definition', 'document_symbols', 'hover', 'project_symbols', 'references', 'type_definition']);
+      for (const tool of ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition']) {
         assert.equal(pythonServer.tools[tool].annotations.readOnlyHint, true);
-        const arguments_ = tool === 'document_symbols' ? { workspace_root: work, file: 'symbols.py' } : tool === 'project_symbols' ? { workspace_root: work, file: 'search-a/main.py', query: 'HiddenAlpha' } : { workspace_root: work, file: 'main.py', line: 3, character: 2 };
+        const arguments_ = tool === 'document_symbols' ? { workspace_root: work, file: 'symbols.py' } : tool === 'project_symbols' ? { workspace_root: work, file: 'search-a/main.py', query: 'HiddenAlpha' } : tool === 'type_definition' ? { workspace_root: work, file: 'type-use.py', line: 5, character: 15 } : { workspace_root: work, file: 'main.py', line: 3, character: 2 };
         const result = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool, arguments: arguments_ });
         assert.ok(!result.isError, `Python MCP ${tool} failed: ${result.content?.[0]?.text ?? 'no content'}`);
         const output = JSON.parse(result.content[0].text);
@@ -249,6 +249,21 @@ async function appServer(options, env, work, installed, navigate = true) {
           assert.deepEqual(await search('search-a/main.py', 'NoSuchSymbolAnywhere'), []);
           assert.deepEqual(await search('search-a/main.py', 'HiddenBeta'), []);
           assert.ok((await search('search-b/main.py', 'HiddenBeta')).some(s => s.name === 'HiddenBeta'));
+        }
+        if (tool === 'type_definition') {
+          assert.deepEqual(pythonServer.tools[tool].inputSchema.required, ['workspace_root', 'file', 'line', 'character']);
+          const first = result => Array.isArray(result) ? result[0] : result;
+          assert.ok((first(data).uri ?? first(data).targetUri).endsWith('/type_models.py'));
+          const call = async (name, file, line, character) => {
+            const response = await rpc('mcpServer/tool/call', { threadId, server: 'python-lsp', tool: name, arguments: { workspace_root: work, file, line, character } });
+            assert.ok(!response.isError); return JSON.parse(response.content[0].text).result;
+          };
+          const definition = first(await call('definition', 'type-use.py', 5, 15));
+          assert.ok((definition.uri ?? definition.targetUri).endsWith('/type-use.py'));
+          assert.equal((definition.range ?? definition.targetSelectionRange).start.line, 2);
+          const stub = first(await call(tool, 'type-use.py', 6, 13));
+          assert.ok((stub.uri ?? stub.targetUri).endsWith('/type_api.pyi'));
+          assert.deepEqual(await call(tool, 'type-empty.py', 1, 2), []);
         }
       }
     }
@@ -476,7 +491,11 @@ export async function runCodexVerification(options, { installed = false } = {}) 
       sources['main.py'] = 'def greet(name: str) -> str:\n    return name\ngreet("hello")\n';
       sources['symbols.py'] = 'class Greeter:\n    def greet(self, name: str) -> str:\n        return name\n\ndef decorate(text: str) -> str:\n    return text\n';
       sources['empty.py'] = '# No symbols here.\n';
-      for (const file of ['main.py', 'symbols.py', 'empty.py']) await writeFile(path.join(work, file), sources[file]);
+      sources['type_models.py'] = 'class Person:\n    pass\n';
+      sources['type_api.pyi'] = 'class StubPerson:\n    ...\n';
+      sources['type-use.py'] = 'from type_models import Person\nfrom type_api import StubPerson\nperson: Person = Person()\nstub: StubPerson = StubPerson()\nuse_person = person\nuse_stub = stub\n';
+      sources['type-empty.py'] = '# No type here.\n';
+      for (const file of ['main.py', 'symbols.py', 'empty.py', 'type_models.py', 'type_api.pyi', 'type-use.py', 'type-empty.py']) await writeFile(path.join(work, file), sources[file]);
       for (const [name, symbol] of [['search-a', 'HiddenAlpha'], ['search-b', 'HiddenBeta']]) {
         await mkdir(path.join(work, name));
         await symlink(options.pythonEnv, path.join(work, name, '.venv'), process.platform === 'win32' ? 'junction' : 'dir');
@@ -508,7 +527,7 @@ export async function runCodexVerification(options, { installed = false } = {}) 
     for (const [file, text] of Object.entries(sources)) assert.equal(await readFile(path.join(work, file), 'utf8'), text, `Fixture did not restore ${file}`);
     assert.ok(!interrupted, 'Verification interrupted');
     if (installed) assert.deepEqual(await appServer(options, env, work, installed, false), hook, 'Installed hook trust or activation changed during verification');
-    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols', 'project_symbols'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
+    summary = { mode: installed ? 'installed' : 'isolated', enabled: hook.enabled, trustStatus: hook.trustStatus, navigationTools: checked, applicationTools: applied, ...(options.python ? { pythonTools: ['definition', 'references', 'hover', 'document_symbols', 'project_symbols', 'type_definition'], pythonTrustStatus: hook.pythonTrustStatus, pythonBundleFiles: hook.pythonBundleFiles, hookExecution: installed ? 'trusted' : 'isolated_trust_bypass', mixedLanguagePatches: 2 } : {}), ...transition, configUnchanged: true, installationUnchanged: true, externalModelCalled: false, rawRequestLogsSaved: false };
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     try { await Promise.all([...children].map(stop)); }
