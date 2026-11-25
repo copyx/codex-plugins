@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import { resolveProject, markLocations } from './lib/project.mjs';
 import { LspSession } from './lib/lsp.mjs';
 
-const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition' };
+const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', document_symbols: 'textDocument/documentSymbol', project_symbols: 'workspace/symbol', type_definition: 'textDocument/typeDefinition', implementation: 'textDocument/implementation' };
 const fileFields = { workspace_root: { type: 'string' }, file: { type: 'string' } };
 const positionFields = { line: { type: 'integer', minimum: 1 }, character: { type: 'integer', minimum: 1 } };
 const parameters = { document_symbols: {}, project_symbols: { query: { type: 'string', minLength: 1 } } };
@@ -19,7 +19,7 @@ function validUri(uri) {
 const validLocation = location => location && validUri(location.uri) && validRange(location.range);
 const validLocationLink = link => link && validUri(link.targetUri) && validRange(link.targetRange) && validRange(link.targetSelectionRange)
   && (link.originSelectionRange === undefined || validRange(link.originSelectionRange));
-function validTypeDefinition(result) {
+function validLocationResult(result) {
   return result === null || validLocation(result) || (Array.isArray(result) && (result.every(validLocation) || result.every(validLocationLink)));
 }
 const tools = Object.keys(methods).map(name => ({
@@ -29,6 +29,8 @@ const tools = Object.keys(methods).map(name => ({
       ? 'Search symbol names in the ty session selected by the anchor file and its Python project/config/environment. Use absolute workspace_root, file, and a non-blank query. Returns selected search_scope and original symbol locations/kinds with workspace boundary labels. This does not promise repository-wide coverage or a hard project-root filter. Read-only.'
     : name === 'type_definition'
       ? 'Find the declaration location of the type at a local .py/.pyi position using ty 0.0.109. Use an absolute workspace_root, a file inside it and 1-based UTF-16 line/character. Preserves 0-based LSP Location/LocationLink results and marks external locations. Returns [] when no type is found. Read-only.'
+    : name === 'implementation'
+      ? 'Find implementation locations at a local .py/.pyi position using ty 0.0.109. Use an absolute workspace_root, a file inside it and 1-based UTF-16 line/character. Preserves original 0-based Location/LocationLink results, including base classes or members returned by the server. Returns [] for no result. Read-only.'
     : `${name} for a local .py/.pyi file using ty 0.0.109. workspace_root is absolute; file is workspace-relative or absolute within it. line/character are 1-based UTF-16; results keep 0-based LSP ranges. External locations are marked; their source is not read by this bridge. Read-only MVP.`,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   inputSchema: { type: 'object', additionalProperties: false, properties: { ...fileFields, ...(parameters[name] ?? positionFields) }, required: ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)] },
@@ -46,6 +48,7 @@ async function dispatch(message) {
     if (!Object.hasOwn(methods, name)) throw new Error('Unknown tool');
     const documentSymbols = name === 'document_symbols';
     const projectSymbols = name === 'project_symbols';
+    const locationRequest = name === 'type_definition' || name === 'implementation';
     const allowed = ['workspace_root', 'file', ...Object.keys(parameters[name] ?? positionFields)];
     if (!args || Object.keys(args).some(k => !allowed.includes(k)) || typeof args.workspace_root !== 'string' || typeof args.file !== 'string') throw new Error(`Expected only ${allowed.join(', ')}`);
     if (!documentSymbols && !projectSymbols && (!Number.isInteger(args.line) || args.line < 1 || !Number.isInteger(args.character) || args.character < 1)) throw new Error('Expected positive integer line/character');
@@ -55,12 +58,13 @@ async function dispatch(message) {
     if (documentSymbols && !active.capabilities.documentSymbolProvider) throw new Error('ty server does not support textDocument/documentSymbol');
     if (projectSymbols && !active.capabilities.workspaceSymbolProvider) throw new Error('ty server does not support workspace/symbol');
     if (name === 'type_definition' && !active.capabilities.typeDefinitionProvider) throw new Error('ty server does not support textDocument/typeDefinition');
+    if (name === 'implementation' && !active.capabilities.implementationProvider) throw new Error('ty server does not support textDocument/implementation');
     const uri = await active.sync(project.file);
     const params = projectSymbols ? { query: args.query } : { textDocument: { uri }, ...(documentSymbols ? {} : { position: active.position(uri, args.line, args.character) }), ...(name === 'references' ? { context: { includeDeclaration: true } } : {}) };
     const response = await active.request(methods[name], params);
-    if (name === 'type_definition' && !validTypeDefinition(response)) throw new Error('Invalid typeDefinition response: expected Location, Location[], LocationLink[] or null');
+    if (locationRequest && !validLocationResult(response)) throw new Error(`Invalid ${name === 'implementation' ? 'implementation' : 'typeDefinition'} response: expected Location, Location[], LocationLink[] or null`);
     if ((documentSymbols || projectSymbols) && response !== null && !Array.isArray(response)) throw new Error(`Invalid ${methods[name]} response: expected array or null`);
-    const result = documentSymbols ? response ?? [] : await markLocations(projectSymbols || name === 'type_definition' ? response ?? [] : response, project.workspace);
+    const result = documentSymbols ? response ?? [] : await markLocations(projectSymbols || locationRequest ? response ?? [] : response, project.workspace);
     const output = { workspace_root: project.workspace, project_root: project.root, config: project.config, environment: project.environment, server: { name: 'ty', version: '0.0.109', executable: active.command, configuration_source: active.runtime.source }, result };
     if (projectSymbols) output.search_scope = { kind: 'selected_project_session', workspace_root: project.workspace, project_root: project.root, config: project.config, anchor_file: project.file };
     const text = JSON.stringify(output);

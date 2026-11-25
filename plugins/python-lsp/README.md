@@ -1,9 +1,9 @@
 # Python LSP
 
-Python 파일의 **정의·타입 정의·참조·호버·문서 심볼·프로젝트 심볼**을 조회하고 Codex `apply_patch` 편집 뒤 변경 파일의
-타입 진단을 전달합니다. 현재 작업 브랜치는 읽기 전용 도구 6개를 제공하며 소스를 수정하지 않습니다.
+Python 파일의 **정의·타입 정의·구현·참조·호버·문서 심볼·프로젝트 심볼**을 조회하고 Codex `apply_patch` 편집 뒤 변경 파일의
+타입 진단을 전달합니다. 현재 작업 브랜치는 읽기 전용 도구 7개를 제공하며 소스를 수정하지 않습니다.
 TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단이 따로 전달됩니다.
-문서·프로젝트 심볼과 타입 정의는 후속 확장 중인 기능입니다. 기존 0.1.1 설치본에 자동 반영된 것은 아니므로 실제 도구 목록을 확인하세요.
+문서·프로젝트 심볼과 타입 정의·구현 탐색은 후속 확장 중인 기능입니다. 기존 0.1.1 설치본에 자동 반영된 것은 아니므로 실제 도구 목록을 확인하세요.
 
 ## LSP 기능
 
@@ -11,12 +11,12 @@ TypeScript LSP와 함께 설치하면 혼합 패치에서 각 언어의 진단�
 | --- | --- | --- |
 | 정의 탐색 (Definition) | 제공 | `definition`으로 지정한 위치의 정의 조회 |
 | 타입 정의 탐색 (Type Definition) | 작업 브랜치 제공 | `type_definition`으로 지정한 위치가 사용하는 타입 선언 조회; 변수 자체의 정의와 다를 수 있고 .pyi 선언도 반환 |
+| 구현 탐색 (Implementation) | 작업 브랜치 제공 | `implementation`으로 클래스/멤버의 구현 위치 조회; ty가 반환한 기반 위치 자체도 보존 |
 | 참조 탐색 (References) | 제공 | `references`로 선언을 포함한 참조 조회 |
 | 호버 (Hover) | 제공 | `hover`로 지정한 위치의 타입·설명 조회 |
 | 문서 심볼 (Document Symbol) | 작업 브랜치 제공 | `document_symbols(workspace_root,file)`로 한 파일의 함수·클래스·메서드 조회; 자식 계층·이름·종류·범위를 보존 |
 | 프로젝트 심볼 검색 (Workspace Symbol) | 작업 브랜치 제공 | `project_symbols(workspace_root,file,query)`로 기준 파일이 선택한 ty 프로젝트 세션에서 이름 검색; 선택한 프로젝트·설정·기준 파일 표시 |
 | 편집 후 타입 진단 (Diagnostics) | 조건부 제공 | 신뢰한 `apply_patch` 훅이 추가·수정·이동된 파일을 검사 |
-| 구현 탐색 | 미제공 | 현재 도구에 포함되지 않음 |
 | 미리보기·실제 편집 적용 | 미제공 | 현재 도구에 포함되지 않음 |
 
 ## 필수 조건
@@ -92,7 +92,7 @@ ty 설정이 없는 프로젝트에서는 워크스페이스 밖 상위 설정�
 
 > python-lsp로 src/main.py 12행 7열의 정의와 참조를 찾아줘. 호버 타입도 보여줘.
 
-정의·타입 정의·참조·호버는 `workspace_root`, `file`, `line`, `character`를 받습니다.
+정의·타입 정의·구현·참조·호버는 `workspace_root`, `file`, `line`, `character`를 받습니다.
 `workspace_root`는 절대 경로이고 `file`은 그 안의 상대 경로나 절대 경로입니다.
 반환되는 LSP 범위는 0부터 시작하며 외부 라이브러리 위치에는
 `workspace_boundary: "outside"`가 붙습니다. 플러그인이 그 소스를 별도로 읽거나 쓰지 않습니다.
@@ -104,6 +104,13 @@ ty 설정이 없는 프로젝트에서는 워크스페이스 밖 상위 설정�
 `definition`은 main.py를, `type_definition`은 models.py 또는 API stub(.pyi)의 클래스를 가리킬 수 있습니다.
 찾은 위치는 서버의 Location(단일/배열) 또는 LocationLink 배열 형식을 보존합니다.
 타입을 찾지 못한 정상 결과는 `[]`이며 capability 미지원·서버 오류·잘못된 위치 응답 형식은 오류입니다.
+
+> python-lsp로 src/main.py 12행 7열의 Greeter와 greet 메서드 구현 위치를 찾아줘.
+
+`implementation`은 같은 1-based UTF-16 위치 입력으로 구현을 조회합니다.
+ty 0.0.109의 실제 다중 파일 fixture에서는 기반 클래스/메서드 자체와 두 파생 구현을 각각 반환했습니다.
+결과를 파생 구현만으로 줄이지 않으므로 기반 위치가 포함될 수 있으며, 항상 특정 개수라고 보장하지 않습니다.
+서버의 Location/LocationLink 형식과 0-based 범위·외부 위치 표시는 유지하고, 정상 결과 없음은 `[]`입니다.
 
 > python-lsp로 src/models.py의 함수와 클래스·메서드 목록을 보여줘.
 

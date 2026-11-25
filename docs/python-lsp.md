@@ -71,6 +71,27 @@ Location 단일/배열 등 실제 ty에서 얻지 않은 형식과 미지원/오
 실제 격리 Codex에서 Python 6개·TS 11개 목록/호출, 혼합 패치 2회·모델 요청 3회와
 언어별 새 오류/정상 결과를 확인했다. 정적 53파일과 `git diff --check`도 통과했다.
 
+## 후속 구현 탐색 — Orca #72
+
+`implementation(workspace_root,file,line,character)`은 기존 위치·프로젝트/환경 선택을 사용해
+`textDocument/implementation`을 호출한다. implementationProvider 미지원과 요청 오류는 실패로 반환하고
+client implementation.linkSupport=true를 광고한다. Location 단일/배열·LocationLink 배열·null 계약은
+타입 정의와 같은 검증 함수를 공유하며, 다른 도구의 입력/결과 정책은 바꾸지 않는다.
+정상 빈 결과는 `[]`, 비어 있지 않은 결과는 원래 형식/범위/외부 표시를 유지한다.
+
+실제 ty 0.0.109에서 abstract Greeter와 두 파생 구현을 세 파일에 두고 클래스와 greet 멤버를 조회했다.
+각각 기반 위치 자체를 포함한 3개 LocationLink가 나왔다. 제품에서 기반/추상 위치를 제거하거나
+정렬·중복 제거하지 않는다. 직접 LSP와 MCP 결과는 순서를 가정하지 않는 비교로 payload 전체를 확인했고,
+주석의 빈 결과, traversal/symlink/좌표 경계와 CRLF·이모지 앞 UTF-16 위치도 검사했다.
+단일 Location 등 실제 ty가 반환하지 않은 형식과 미지원/오류/잘못된 응답은 통제된 stdio fixture 증거다.
+[LSP 3.17 구현 탐색 계약](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/language/implementation.md)에
+맞춰 원형을 보존하며, 모든 Python 구현 계층의 완전성이나 고정 결과 개수를 약속하지 않는다.
+사용자 설치·신뢰는 변경하지 않고 버전 마감은 #78로 남긴다.
+
+2026-11-25 검증: Python 37개·기존 TS 49개, 실패/건너뜀 0.
+실제 격리 Codex에서 Python 7개·TS 11개 목록/호출, 클래스/멤버 복수 구현과 빈 결과,
+혼합 패치 2회·모델 요청 3회·언어별 새 오류/정상 결과를 확인했다. 정적 53파일과 diff 검사도 통과했다.
+
 ## 계약과 구현 선택
 
 `plugins/python-lsp`는 매니페스트, MCP 서버, lib, 빈 기본 설정, 훅을 모두 포함한다.
